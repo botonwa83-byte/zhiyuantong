@@ -61,13 +61,15 @@ func parseCsv(_ text: String) -> [[String]] {
 }
 
 enum ColumnKey: String, CaseIterable {
-    case score, rank, uni, prov, track, year, plan, employ, further, salary, industry
+    case score, rank, uni, major, subjectReq, prov, track, year, plan, employ, further, salary, industry
 
     var keys: [String] {
         switch self {
         case .score: return ["分数", "总分", "成绩", "投档分", "录取分", "最低分", "文化分", "score", "minscore", "min_score"]
         case .rank: return ["位次", "最低位次", "排名", "名次", "累计", "累计人数", "累计位次", "段内位次", "rank", "minrank", "min_rank"]
         case .uni: return ["院校", "学校", "院校名称", "学校名称", "高校", "高校名称", "招生院校", "university", "school", "college", "name"]
+        case .major: return ["专业名称", "招生专业", "专业类", "专业", "major"]
+        case .subjectReq: return ["选科要求", "选考科目", "科目要求", "选考要求", "subjectreq"]
         case .prov: return ["省份", "省", "招生省份", "省市", "province", "prov"]
         case .track: return ["科类", "类别", "科目", "文理", "选科", "track", "category", "subject"]
         case .year: return ["年份", "年", "年度", "year"]
@@ -83,6 +85,17 @@ enum ColumnKey: String, CaseIterable {
 func findColumn(_ headers: [String], _ key: ColumnKey) -> Int {
     let keys = key.keys
     for (i, h) in headers.enumerated() {
+        let norm = h.lowercased().replacingOccurrences(of: "[\\s_-]", with: "", options: .regularExpression)
+        if keys.contains(where: { norm.contains($0.lowercased()) }) { return i }
+    }
+    return -1
+}
+
+/// 找列但跳过已被占用的列：如「选科要求」同时含「选科」，不能让它抢走科类列
+func findColumnExcluding(_ headers: [String], _ key: ColumnKey, excluding: Set<Int>) -> Int {
+    let keys = key.keys
+    for (i, h) in headers.enumerated() {
+        if excluding.contains(i) { continue }
         let norm = h.lowercased().replacingOccurrences(of: "[\\s_-]", with: "", options: .regularExpression)
         if keys.contains(where: { norm.contains($0.lowercased()) }) { return i }
     }
@@ -169,14 +182,80 @@ struct OfficialEmployment: Codable, Identifiable {
     var id: String { uniName }
 }
 
+/// 专业级录取线：官方/人工整理的专业录取分，带选科要求（3+1+2 省份用于硬过滤）
+struct OfficialMajorAdmission: Codable, Identifiable {
+    var uniName: String
+    var provId: String
+    var track: Track
+    var year: Int
+    var majorName: String
+    var score: Double
+    var rank: Double?
+    var plan: Double?
+    /// 选科要求原始文本，如「物理+化学」；空表示不限
+    var subjectReq: String?
+    var batch: String?
+
+    var id: String { "\(provId)-\(track.rawValue)-\(year)-\(uniName)-\(majorName)" }
+
+    /// 解析出要求的科目，如「物理+化学」→ ["物理", "化学"]
+    var requiredSubjects: [String] {
+        guard let s = subjectReq else { return [] }
+        return GAOKAO_SUBJECTS.filter { s.contains($0) }
+    }
+
+    /// 考生的选科能否报这个专业：要求科目必须全部出现在考生选科里（首选科目由 track 保证）
+    func meets(_ mySubjects: [String]) -> Bool {
+        let req = requiredSubjects
+        if req.isEmpty { return true }
+        if mySubjects.isEmpty { return true } // 未填选科时不做过滤，避免误杀
+        return req.allSatisfy { mySubjects.contains($0) }
+    }
+}
+
 struct OfficialDataset: Codable {
     var updatedAt: Double
     var rankTables: [RankTable]
     var admissions: [OfficialAdmission]
     var employments: [OfficialEmployment]
+    var majorAdmissions: [OfficialMajorAdmission]
+
+    private enum CodingKeys: String, CodingKey {
+        case updatedAt, rankTables, admissions, employments, majorAdmissions
+    }
+
+    init(
+        updatedAt: Double, rankTables: [RankTable], admissions: [OfficialAdmission],
+        employments: [OfficialEmployment], majorAdmissions: [OfficialMajorAdmission]
+    ) {
+        self.updatedAt = updatedAt
+        self.rankTables = rankTables
+        self.admissions = admissions
+        self.employments = employments
+        self.majorAdmissions = majorAdmissions
+    }
 
     static var empty: OfficialDataset {
-        OfficialDataset(updatedAt: 0, rankTables: [], admissions: [], employments: [])
+        OfficialDataset(updatedAt: 0, rankTables: [], admissions: [], employments: [], majorAdmissions: [])
+    }
+
+    // 老存档没有 majorAdmissions 键：缺失按空数组处理，不能整份解码失败导致丢档
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        updatedAt = (try? c.decode(Double.self, forKey: .updatedAt)) ?? 0
+        rankTables = (try? c.decode([RankTable].self, forKey: .rankTables)) ?? []
+        admissions = (try? c.decode([OfficialAdmission].self, forKey: .admissions)) ?? []
+        employments = (try? c.decode([OfficialEmployment].self, forKey: .employments)) ?? []
+        majorAdmissions = (try? c.decode([OfficialMajorAdmission].self, forKey: .majorAdmissions)) ?? []
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(updatedAt, forKey: .updatedAt)
+        try c.encode(rankTables, forKey: .rankTables)
+        try c.encode(admissions, forKey: .admissions)
+        try c.encode(employments, forKey: .employments)
+        try c.encode(majorAdmissions, forKey: .majorAdmissions)
     }
 }
 
@@ -193,6 +272,16 @@ func findAdmission(_ ds: OfficialDataset, _ uniName: String, _ provId: String, _
         $0.provId == provId && $0.track == track && $0.year == year
             && (normalizeUniName($0.uniName).contains(target) || target.contains(normalizeUniName($0.uniName)))
     })
+}
+
+/// 某校某年某科类的专业级录取线（按最低分降序）
+func findMajorAdmissions(
+    _ ds: OfficialDataset, _ uniName: String, _ provId: String, _ track: Track, _ year: Int
+) -> [OfficialMajorAdmission] {
+    let target = normalizeUniName(uniName)
+    return ds.majorAdmissions
+        .filter { $0.provId == provId && $0.track == track && $0.year == year && normalizeUniName($0.uniName) == target }
+        .sorted { $0.score > $1.score }
 }
 
 func findEmployment(_ ds: OfficialDataset, _ uniName: String) -> OfficialEmployment? {
@@ -380,6 +469,79 @@ func importAdmissionCsv(_ text: String, ctx: ImportContext, into ds: inout Offic
     )
 }
 
+/// 解析专业级录取线（列：院校、专业、最低分；可选 位次 / 计划 / 选科要求 / 批次 / 省份 / 年份 / 科类）
+func parseMajorAdmissionCsv(_ text: String, ctx: ImportContext) -> ParseResult<OfficialMajorAdmission> {
+    let rows = parseCsv(text)
+    var warnings: [String] = []
+    guard rows.count >= 2 else { return ParseResult(data: [], rows: 0, warnings: ["内容不足两行，无法解析"]) }
+    let header = hasHeader(rows)
+    let body = header ? Array(rows.dropFirst()) : rows
+    let hs = header ? rows[0] : []
+    // 「选科要求」里含「选科」，会抢走科类列，先定位再排除
+    let iSubject = header ? findColumn(hs, .subjectReq) : -1
+    let taken: Set<Int> = iSubject >= 0 ? [iSubject] : []
+    let iUni = header ? findColumnExcluding(hs, .uni, excluding: taken) : 0
+    let iMajor = header ? findColumnExcluding(hs, .major, excluding: taken) : 1
+    let iScore = header ? findColumnExcluding(hs, .score, excluding: taken) : 2
+    let iRank = header ? findColumnExcluding(hs, .rank, excluding: taken.union(iScore >= 0 ? [iScore] : [])) : -1
+    let iPlan = header ? findColumnExcluding(hs, .plan, excluding: taken) : -1
+    let iProv = header ? findColumnExcluding(hs, .prov, excluding: taken) : -1
+    let iYear = header ? findColumnExcluding(hs, .year, excluding: taken) : -1
+    let iTrack = header ? findColumnExcluding(hs, .track, excluding: taken) : -1
+    guard iUni >= 0, iMajor >= 0, iScore >= 0 else {
+        return ParseResult(data: [], rows: 0, warnings: ["未找到「院校名称 / 专业名称 / 最低分」列，请检查表头"])
+    }
+
+    var data: [OfficialMajorAdmission] = []
+    var seen = Set<String>()
+    var n = 0
+    for r in body {
+        let uni = r[exist: iUni].trimmingCharacters(in: .whitespaces)
+        let major = r[exist: iMajor].trimmingCharacters(in: .whitespaces)
+        guard !uni.isEmpty, !major.isEmpty, let score = toNumber(r[exist: iScore]) else { continue }
+        let provId = normalizeProvince(iProv >= 0 ? r[exist: iProv] : "", fallback: ctx.provId)
+        let year = Int(toNumber(iYear >= 0 ? r[exist: iYear] : "") ?? Double(ctx.year))
+        let track = normalizeTrack(iTrack >= 0 ? r[exist: iTrack] : "", fallback: ctx.track)
+        let key = "\(provId)|\(track.rawValue)|\(year)|\(normalizeUniName(uni))|\(major)"
+        if seen.contains(key) { continue }
+        seen.insert(key)
+        data.append(
+            OfficialMajorAdmission(
+                uniName: uni, provId: provId, track: track, year: year, majorName: major,
+                score: score,
+                rank: iRank >= 0 ? toNumber(r[exist: iRank]) : nil,
+                plan: iPlan >= 0 ? toNumber(r[exist: iPlan]) : nil,
+                subjectReq: iSubject >= 0 ? r[exist: iSubject].trimmingCharacters(in: .whitespaces) : nil,
+                batch: nil
+            )
+        )
+        n += 1
+    }
+    if data.isEmpty { warnings.append("未解析到有效数据") }
+    return ParseResult(data: data, rows: n, warnings: warnings)
+}
+
+func importMajorAdmissionCsv(_ text: String, ctx: ImportContext, into ds: inout OfficialDataset) -> ImportReport {
+    let res = parseMajorAdmissionCsv(text, ctx: ctx)
+    guard !res.data.isEmpty else {
+        return ImportReport(ok: false, rows: 0, messages: res.warnings.isEmpty ? ["未解析到有效数据"] : res.warnings)
+    }
+    let incoming = res.data
+    ds.majorAdmissions.removeAll { m in
+        incoming.contains { n in
+            n.provId == m.provId && n.track == m.track && n.year == m.year
+                && normalizeUniName(n.uniName) == normalizeUniName(m.uniName) && n.majorName == m.majorName
+        }
+    }
+    ds.majorAdmissions.append(contentsOf: incoming)
+    ds.updatedAt = Date().timeIntervalSince1970 * 1000
+    let withReq = incoming.filter { !($0.subjectReq ?? "").isEmpty }.count
+    return ImportReport(
+        ok: true, rows: res.rows,
+        messages: ["已导入 \(incoming.count) 条专业录取线，其中 \(withReq) 条带选科要求"] + res.warnings
+    )
+}
+
 func importEmploymentCsv(_ text: String, into ds: inout OfficialDataset) -> ImportReport {
     let rows = parseCsv(text)
     var warnings: [String] = []
@@ -444,11 +606,12 @@ struct DatasetStats {
     var provinces: [String]
     var unis: Int
     var employments: Int
+    var majors: Int
 }
 
 func datasetStats(_ ds: OfficialDataset) -> DatasetStats {
-    let years = Array(Set(ds.rankTables.map(\.year) + ds.admissions.map(\.year))).sorted()
-    let provs = Array(Set(ds.rankTables.map(\.provId) + ds.admissions.map(\.provId))).sorted()
+    let years = Array(Set(ds.rankTables.map(\.year) + ds.admissions.map(\.year) + ds.majorAdmissions.map(\.year))).sorted()
+    let provs = Array(Set(ds.rankTables.map(\.provId) + ds.admissions.map(\.provId) + ds.majorAdmissions.map(\.provId))).sorted()
     return DatasetStats(
         tables: ds.rankTables.count,
         points: ds.rankTables.reduce(0) { $0 + $1.points.count },
@@ -456,7 +619,8 @@ func datasetStats(_ ds: OfficialDataset) -> DatasetStats {
         years: years,
         provinces: provs,
         unis: Set(ds.admissions.map { normalizeUniName($0.uniName) }).count,
-        employments: ds.employments.count
+        employments: ds.employments.count,
+        majors: ds.majorAdmissions.count
     )
 }
 

@@ -34,3 +34,13 @@ dataset = "school-admission"
 column_map = { university_name = "uni_name", university_code = "uni_code", min_score = "min_score", min_rank = "min_rank", category = "track", batch = "batch", major_group = "group", subject_req = "subject_req", admit_count = "plan", school_province = "uni_prov", school_nature = "nature", is_985 = "is_985", is_211 = "is_211" }
 fallback_columns = { group = "subject_req" }
 track_filter = ["物理类", "历史类"]
+
+# 专业级录取线（专业组 / 专业 + 选科要求 + 计划数）：官方 PDF 无稳定直链，掌上高考等聚合站也不自动抓，
+# 一律人工整理成 CSV 放 raw/henan/{year}/major_admission_major.csv（表头见 templates/major_admission_template.csv）
+[[sources]]
+kind = "major_admission"
+url_template = "https://www.haeea.cn/"
+parser = "manual"
+
+[sources.options]
+dataset = "major"

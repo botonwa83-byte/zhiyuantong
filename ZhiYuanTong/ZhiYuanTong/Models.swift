@@ -28,6 +28,9 @@ enum ExamMode: String, Codable {
     }
 }
 
+/// 高考科目全集：解析专业选科要求、考生选科时使用
+let GAOKAO_SUBJECTS = ["物理", "化学", "生物", "政治", "历史", "地理"]
+
 /// 科类名称随考试模式变化：3+1+2 → 物理类/历史类；3+3 → 综合；文理分科 → 理科/文科
 func trackLabel(_ track: Track, _ mode: ExamMode) -> String {
     switch mode {

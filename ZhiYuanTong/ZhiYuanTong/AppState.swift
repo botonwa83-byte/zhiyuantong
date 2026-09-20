@@ -198,6 +198,13 @@ final class AppState: ObservableObject {
         return report
     }
 
+    func importMajorAdmission(_ text: String, ctx: ImportContext) -> ImportReport {
+        var ds = engine.dataset
+        let report = importMajorAdmissionCsv(text, ctx: ctx, into: &ds)
+        if report.ok { dataset = ds }
+        return report
+    }
+
     func clearDataset() {
         LocalStore.shared.clearDataset()
         dataset = .empty
@@ -206,7 +213,8 @@ final class AppState: ObservableObject {
     var stats: DatasetStats { datasetStats(engine.dataset) }
 
     var hasOfficialData: Bool {
-        !engine.dataset.rankTables.isEmpty || !engine.dataset.admissions.isEmpty || !engine.dataset.employments.isEmpty
+        !engine.dataset.rankTables.isEmpty || !engine.dataset.admissions.isEmpty
+            || !engine.dataset.employments.isEmpty || !engine.dataset.majorAdmissions.isEmpty
     }
 }
 

@@ -92,6 +92,15 @@
 - [ ] 待人工验收（模拟器/真机）：山东 → 无科类选择器且显示「综合」；新疆 → 「理科/文科」；河南 → 「物理类/历史类」；老账号登录不丢档
 - [ ] 后续两大项已拆成独立计划（同一 plan 文件末尾）：**Plan B 专业级录取数据 `major_admission`**（含 3+1+2 选科要求硬过滤）、**Plan C 外部数据接入**（掌上高考仅作人工核对/人工导出，不爬其非公开接口）
 
+### 3.8 专业级录取数据（2026-09-20 完成数据链，App 端已可导入展示）
+- [x] 契约已有 `major_admission`（`data-pipeline/pipeline/contract.py`）；`providers/base.py` 的 `local_only` 加入 `manual`，人工整理 CSV 走 `raw/<省>/<年>/` 本地路径，不再尝试联网下载
+- [x] 河南配置新增 `[[sources]] kind = "major_admission" parser = "manual"`（`configs/provinces/henan.toml`），本地文件 `raw/henan/{year}/major_admission_major.csv`
+- [x] CSV 模板 `data-pipeline/templates/major_admission_template.csv`：`院校名称,专业名称,录取批次,科类,最低分,最低位次,计划数,选科要求`
+- [x] 新增测试 `data-pipeline/tests/test_major_admission.py`（manual 本地路径、归一后列与合同一致、重复主键被判阻断）；全量 `pytest` 90 通过
+- [x] App：`OfficialMajorAdmission` + `OfficialDataset.majorAdmissions`（自定义 Codable，**老存档无该键时按空数组处理，不丢档**）、`findMajorAdmissions`、`importMajorAdmissionCsv`、导入页新增「专业录取线」类型、院校详情新增「专业录取线」卡片（带选科要求标签）
+- [x] 选科基础：`Models.swift` 新增 `GAOKAO_SUBJECTS`，`StudentProfile.subjects`（已存在但此前无人填充）；专业行有 `requiredSubjects` 与 `meets(_:)`，考生填了选科会标「选科不符」
+- [ ] 待做（下一轮）：① 档案页增加选科录入 UI（六门多选），② `Recommend` 按选科要求**硬过滤**院校专业组，③ 专业级概率（用专业线替代院校线做等效分测算）
+
 ### 4. 产物与打包（Task 8-10）
 - [ ] `pipeline/build.py` 扩展：分省产物包（web/iOS），按省按需导入（单省 admission ≈ 150KB，20 省 × 3 年 ≈ 9MB）
 - [ ] 复核队列：处理 512 条位次口径警告，确认是源数据问题还是解析问题

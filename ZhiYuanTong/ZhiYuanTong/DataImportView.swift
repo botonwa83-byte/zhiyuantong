@@ -12,12 +12,13 @@ struct DataImportView: View {
     @State private var showFilePicker = false
 
     enum Kind: String, CaseIterable, Identifiable {
-        case rank, admission, employment
+        case rank, admission, major, employment
         var id: String { rawValue }
         var label: String {
             switch self {
             case .rank: return "一分一段表"
             case .admission: return "院校投档线"
+            case .major: return "专业录取线"
             case .employment: return "就业质量报告"
             }
         }
@@ -69,7 +70,10 @@ struct DataImportView: View {
                 MiniStat(label: "一分一段表", value: "\(s.tables)", sub: "\(s.points) 个分数点")
                 MiniStat(label: "投档线", value: "\(s.admissions)", sub: "\(s.unis) 所院校")
             }
-            MiniStat(label: "就业质量报告", value: "\(s.employments)")
+            HStack(spacing: 8) {
+                MiniStat(label: "就业质量报告", value: "\(s.employments)")
+                MiniStat(label: "专业录取线", value: "\(s.majors)", sub: "专业级")
+            }
             if state.hasOfficialData {
                 Button {
                     state.clearDataset()
@@ -158,6 +162,7 @@ struct DataImportView: View {
         switch kind {
         case .rank: return "列：分数, 位次（可选 省份 / 年份 / 科类）。导入后位次换算改用真实数据"
         case .admission: return "列：院校名称, 最低分（可选 位次 / 招生计划 / 省份 / 年份 / 科类）"
+        case .major: return "列：院校名称, 专业名称, 最低分（可选 最低位次 / 计划数 / 选科要求 / 省份 / 年份 / 科类）。掌上高考等站点请人工复制，不要自动抓取"
         case .employment: return "列：院校名称, 毕业去向落实率, 深造率, 平均月薪, 主要行业"
         }
     }
@@ -166,6 +171,7 @@ struct DataImportView: View {
         switch kind {
         case .rank: return "分数,位次\n700,58\n690,150\n680,320"
         case .admission: return "院校名称,省份,科类,年份,最低分,最低位次,招生计划\n郑州大学,河南,物理,2024,590,23000,1250"
+        case .major: return "院校名称,专业名称,科类,年份,最低分,最低位次,计划数,选科要求\n郑州大学,计算机科学与技术,物理,2024,612,21000,120,物理+化学"
         case .employment: return "院校名称,届别,毕业去向落实率,深造率,平均月薪,主要行业\n郑州大学,2024,93.2,45.6,7200,先进制造/信息技术/医疗与卫生"
         }
     }
@@ -174,6 +180,7 @@ struct DataImportView: View {
         switch kind {
         case .rank: return "分数,位次\n700,58\n690,150\n680,320\n670,640\n660,1200\n650,2100\n640,3600\n630,6000"
         case .admission: return "院校名称,省份,科类,年份,最低分,最低位次,招生计划\n郑州大学,河南,物理,2024,590,23000,1250\n深圳大学,广东,物理,2024,596,24000,900"
+        case .major: return "院校名称,专业名称,科类,年份,最低分,最低位次,计划数,选科要求\n郑州大学,计算机科学与技术,物理,2025,612,21000,120,物理+化学\n郑州大学,临床医学,物理,2025,631,9800,60,物理+化学"
         case .employment: return "院校名称,届别,毕业去向落实率,深造率,平均月薪,主要行业\n郑州大学,2024,93.2,45.6,7200,先进制造/信息技术/医疗与卫生"
         }
     }
@@ -182,6 +189,7 @@ struct DataImportView: View {
         switch kind {
         case .rank: report = state.importRank(text, ctx: ctx)
         case .admission: report = state.importAdmission(text, ctx: ctx)
+        case .major: report = state.importMajorAdmission(text, ctx: ctx)
         case .employment: report = state.importEmployment(text)
         }
     }

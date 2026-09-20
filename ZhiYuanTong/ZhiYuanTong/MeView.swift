@@ -65,10 +65,10 @@ struct MeView: View {
 
     private var dataCard: some View {
         VStack(alignment: .leading, spacing: 10) {
-            SectionTitle(title: "官方数据接入", sub: "导入一分一段表 / 投档线 / 就业质量报告后，测算改用真实数据")
+            SectionTitle(title: "官方数据接入", sub: "导入一分一段表 / 投档线 / 专业录取线 / 就业质量报告后，测算改用真实数据")
             let s = state.stats
             Text(state.hasOfficialData
-                 ? "已导入：\(s.tables) 张一分一段表（\(s.points) 个分数点）· \(s.admissions) 条投档线 · \(s.employments) 份就业报告"
+                 ? "已导入：\(s.tables) 张一分一段表（\(s.points) 个分数点）· \(s.admissions) 条投档线 · \(s.majors) 条专业录取线 · \(s.employments) 份就业报告"
                  : "当前使用内置示例模型")
                 .font(.caption).foregroundStyle(Color.ink500)
             Button {

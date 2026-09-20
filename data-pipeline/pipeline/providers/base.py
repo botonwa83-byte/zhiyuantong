@@ -53,7 +53,8 @@ def local_dataset_path(kind: str, year: int, prov_id: str, dataset: str, ext: st
 
 def archive_dest(spec, year: int, prov_id: str) -> Path | None:
     """来源在本地的目标路径；非本地人工下载类来源返回 None。"""
-    local_only = {"hf_csv": "csv", "prov_pdf": "pdf"}
+    # manual 同样只读本地：人工整理（考试院 / 掌上高考人工导出）的 CSV 放 raw/<省>/<年>/
+    local_only = {"hf_csv": "csv", "prov_pdf": "pdf", "manual": "csv"}
     ext = local_only.get(getattr(spec, "parser", ""))
     if not ext:
         return None
