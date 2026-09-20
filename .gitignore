@@ -15,6 +15,8 @@ ZhiYuanTong/*.xcodeproj/project.xcworkspace/xcuserdata
 # 数据管道：原始抓取存档、虚拟环境、第三方基线数据不入库
 data-pipeline/raw
 data-pipeline/.venv
+# 生成物（python -m pipeline.build 可重新生成，不入库）
+data-pipeline/dist
 data-pipeline/baseline
 data-pipeline/.pytest_cache
 data-pipeline/**/__pycache__

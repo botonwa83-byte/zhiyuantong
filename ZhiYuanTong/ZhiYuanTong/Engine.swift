@@ -25,6 +25,21 @@ struct ProvinceTrendPoint: Identifiable {
     var id: Int { year }
 }
 
+/// 专业级录取评估：用「专业录取线」替代院校投档线做等效分测算（需要导入专业录取线数据）
+struct MajorEval: Identifiable {
+    let major: OfficialMajorAdmission
+    /// 专业最低分按「线差不变」折算到今年的等效分
+    let equivScore: Double
+    let prob: Double
+    let tier: String
+    /// 考生分数 - 专业等效分（正代表超过专业线）
+    let gap: Double
+    /// 是否符合考生选考科目；未填选科时恒为 true（不做过滤）
+    let meets: Bool
+
+    var id: String { major.id }
+}
+
 struct Evaluated: Identifiable {
     let rec: UniversityRecord
     let prob: Double
@@ -251,6 +266,45 @@ final class AdmissionEngine {
             rec: rec, prob: prob, tier: tier,
             gap: studentScore - rec.equivScore, rankGap: studentRank - rec.avgRank
         )
+    }
+
+    // MARK: - 专业级录取评估
+
+    /// 专业最低分换算到今年的等效分：线差不变（专业线差 = 该年专业最低分 - 该年特殊类型线）
+    func equivScore(ofMajor m: OfficialMajorAdmission, prov: Province, override: CurrentLines? = nil) -> Double {
+        let yearSpecial = linesOf(prov, m.year, m.track).special
+        let cur = currentLines(prov, m.track, override: override)
+        return jsRound(cur.special + (m.score - yearSpecial))
+    }
+
+    /**
+     * 专业级录取概率。
+     * 只有一年专业线，无法算三年波动，改为「线差法为主 σ≈7 分」+「有专业位次时用位次法加权 35%」；
+     * 专业最低分是「踩线即录」的口径，因此同分差下的概率略高于院校投档线口径。
+     */
+    func evaluateMajors(
+        _ rows: [OfficialMajorAdmission], prov: Province,
+        studentScore: Double, studentRank: Double, subjects: [String],
+        override: CurrentLines? = nil
+    ) -> [MajorEval] {
+        rows.map { m in
+            let eq = equivScore(ofMajor: m, prov: prov, override: override)
+            let p1 = sigmoid(1.35 * ((studentScore - eq) / 7))
+            var prob = p1
+            if let mr = m.rank, mr > 0, studentRank > 0 {
+                prob = 0.65 * p1 + 0.35 * sigmoid(1.25 * log(mr / Swift.max(studentRank, 1)) / 0.55)
+            }
+            let p = clamp(prob, 0.01, 0.97)
+            return MajorEval(
+                major: m,
+                equivScore: eq,
+                prob: p,
+                tier: p >= 0.75 ? "保" : p >= 0.45 ? "稳" : p >= 0.18 ? "冲" : "险",
+                gap: studentScore - eq,
+                meets: m.meets(subjects)
+            )
+        }
+        .sorted { $0.prob > $1.prob }
     }
 
     // MARK: - 省份趋势

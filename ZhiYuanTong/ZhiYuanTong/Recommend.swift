@@ -350,6 +350,16 @@ enum Recommend {
         if blocked > 0 {
             res.warnings.append("按你的选考科目（\(prefs.subjects.joined(separator: "/"))）剔除了 \(blocked) 所已录专业均不符合选科要求的院校；未导入专业录取线的院校不参与该过滤。")
         }
+        // 有专业数据但符合选科的专业很少 → 提示专业选择面窄
+        if !prefs.subjects.isEmpty, !majorsByUni.isEmpty {
+            let narrow = pool.filter { e in
+                guard let rows = majorsByUni[normalizeUniName(e.rec.seed.name)] else { return false }
+                return rows.filter { $0.meets(prefs.subjects) }.count <= 2
+            }
+            if !narrow.isEmpty {
+                res.warnings.append("\(narrow.map(\.rec.seed.name).prefix(3).joined(separator: "、"))等 \(narrow.count) 所院校符合你选科的专业不足 3 个，专业选择面窄，务必确认有能接受的专业再填。")
+            }
+        }
         guard !pool.isEmpty else { return res }
         res.pool = pool.count
 

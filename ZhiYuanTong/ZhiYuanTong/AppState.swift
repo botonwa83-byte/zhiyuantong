@@ -198,6 +198,18 @@ final class AppState: ObservableObject {
         return report
     }
 
+    /// 某校在当前档案下的专业级评估（需先导入「专业录取线」）
+    func majorEvals(_ uniName: String) -> [MajorEval] {
+        guard let p = profile else { return [] }
+        let rows = findMajorAdmissions(engine.dataset, uniName, p.provId, p.track, store.currentYear)
+        guard !rows.isEmpty else { return [] }
+        return engine.evaluateMajors(
+            rows, prov: prov,
+            studentScore: p.score, studentRank: rank, subjects: p.subjects,
+            override: Recommend.override(of: p)
+        )
+    }
+
     func importMajorAdmission(_ text: String, ctx: ImportContext) -> ImportReport {
         var ds = engine.dataset
         let report = importMajorAdmissionCsv(text, ctx: ctx, into: &ds)

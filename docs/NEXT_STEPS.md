@@ -101,11 +101,21 @@
 - [x] 选科基础：`Models.swift` 新增 `GAOKAO_SUBJECTS`，`StudentProfile.subjects`（已存在但此前无人填充）；专业行有 `requiredSubjects` 与 `meets(_:)`，考生填了选科会标「选科不符」
 - [x] 档案页新增「选考科目」多选（3+1+2 首选科目由科类自动补全；3+3 六门任选；老高考不显示），档案概览展示已选科目
 - [x] `Recommend.genVolunteers` 选科**硬过滤**：只对已导入专业录取线的院校生效，该校已录专业无一符合选科 → 剔除并在 warnings 里说明；无专业数据的院校不参与过滤（避免误杀）
-- [ ] 待做（下一轮）：专业级概率——用专业线替代院校线做等效分测算，并在志愿表条目上标注可报专业数
+- [x] 专业级概率（2026-09-20 完成）：`Engine` 新增 `MajorEval` / `equivScore(ofMajor:)` / `evaluateMajors(_:)`——专业线按「线差不变」折算今年等效分，概率 = 线差法（σ≈7 分）为主，有专业位次时位次法加权 35%；`AppState.majorEvals(_:)` 按档案实时算
+- [x] 展示：院校详情「专业录取线」卡片改为概率排序 + 等效分 + 冲稳保标签 + 可报专业数；志愿表每行标注「可报专业 N/M 个 · 稳妥 K 个 · 最稳 XX 65%」；生成向导对「符合选科专业不足 3 个」的院校给出警告
+- [ ] 待做（下一轮）：志愿条目上直接展开「可报专业清单」（点开看专业级概率），以及专业级「冲稳保」分层生成
+
+### 3.9 分省产物包（2026-09-20 完成，App 可直接导入）
+- [x] `pipeline/build.py` 新增 `build_app_imports()`：从 staging 导出 `dist/app_import/{prov}_rank.csv`、`{prov}_admission.csv`、`{prov}_major.csv`，表头与 App 导入页模板一致
+- [x] 投档线按「省份+年份+科类+院校」聚合：多个专业组取**最低**的那条做院校线，计划数**求和**（河南 2025：1687 行 → 1055 所/组）
+- [x] 科类写成各省口径中文名（3+1+2 → 物理类/历史类，3+3 → 综合，文理分科 → 理科/文科），省份写中文名（App `normalizeProvince` 按名称匹配）
+- [x] CLI：`python -m pipeline.build --prov henan [--only app-import|universities]`；新增 `tests/test_build_app_imports.py`（4 项），全量 `pytest` 94 通过
+- [x] `dist/` 加入 `.gitignore`（生成物，可随时重跑）
 
 ### 4. 产物与打包（Task 8-10）
-- [ ] `pipeline/build.py` 扩展：分省产物包（web/iOS），按省按需导入（单省 admission ≈ 150KB，20 省 × 3 年 ≈ 9MB）
+- [ ] 多省批量：把 31 省骨架逐一跑通首年数据（当前只有河南 2025 全链路）
 - [ ] 复核队列：处理 512 条位次口径警告，确认是源数据问题还是解析问题
+- [ ] 产物分发方式：目前产物 CSV 需手工传进手机再在 App 里导入，后续可考虑打包成 `.zyt` 数据集文件或直接在 App 内置按省下载
 
 ## 四、已知坑（避免重复踩）
 
@@ -128,8 +138,9 @@ cd data-pipeline
 .venv/bin/python -m pipeline.run --prov henan --year 2025            # 跑单省
 .venv/bin/python -m pipeline.run --all --year 2025 --list            # 导出下载清单（--prov 不再必填）
 .venv/bin/python -m pipeline.run --all --year 2025                   # 全量跑
-.venv/bin/python -m pipeline.build                                    # 生成 dist/universities_full.csv
-.venv/bin/python -m pytest tests -q                                   # 单测（87 passed）
+.venv/bin/python -m pipeline.build                                    # 院校库 + App 可导入 CSV（dist/app_import/）
+.venv/bin/python -m pipeline.build --prov henan --only app-import     # 只导出一分一段/投档线/专业录取线
+.venv/bin/python -m pytest tests -q                                   # 单测（94 passed）
 cat staging/run_report.json                                           # 运行报告（含 missing/failed 来源）
 ```
 

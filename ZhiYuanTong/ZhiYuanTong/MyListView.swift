@@ -199,6 +199,12 @@ struct MyListView: View {
                         let empItem = EmploymentModel.forecast(name: v.uniName, state.dataset)
                         Text(rowSub(e: e, emp: empItem))
                             .font(.caption2).foregroundStyle(Color.ink400)
+                        let majors = majorInfo(v.uniName)
+                        if let majors {
+                            Text(majors)
+                                .font(.system(size: 10))
+                                .foregroundStyle(majors.contains("无可报") ? Color.danger : Color.good)
+                        }
                         if let note = v.note, !note.isEmpty {
                             Text(note).font(.system(size: 10)).foregroundStyle(Color.brand)
                         }
@@ -226,6 +232,17 @@ struct MyListView: View {
             }
         }
         .card()
+    }
+
+    /// 导入了专业录取线时，标注该志愿的可报专业数（按考生选科过滤）
+    private func majorInfo(_ uniName: String) -> String? {
+        let evals = state.majorEvals(uniName)
+        guard !evals.isEmpty else { return nil }
+        let ok = evals.filter { $0.meets }
+        guard !ok.isEmpty else { return "无可报专业（\(evals.count) 个专业均不符合选科）" }
+        let safe = ok.filter { $0.prob >= 0.45 }.count
+        let top = ok[0]
+        return "可报专业 \(ok.count)/\(evals.count) 个 · 稳妥 \(safe) 个 · 最稳 \(top.major.majorName) \(Int(top.prob * 100))%"
     }
 
     private func rowSub(e: Evaluated?, emp: EmploymentForecast?) -> String {

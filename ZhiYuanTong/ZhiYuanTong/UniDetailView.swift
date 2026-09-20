@@ -73,43 +73,56 @@ struct UniDetailView: View {
         .card()
     }
 
-    /// 专业级录取线：需要导入「专业录取线」CSV 后才显示；带选科要求的会按考生选科标注是否符合
+    /// 专业级录取线与概率：需要导入「专业录取线」CSV 后才显示；
+    /// 概率用专业线差法 + 专业位次法测算，选科不符的专业标红并排除在「可报」之外
     private var majorCard: some View {
+        let evals = state.majorEvals(uniName)
         let provId = state.profile?.provId ?? ""
         let track = state.profile?.track ?? .phy
-        let subjects = state.profile?.subjects ?? []
         let year = DataStore.shared.currentYear
-        let rows = findMajorAdmissions(state.dataset, uniName, provId, track, year)
         return Group {
-            if !rows.isEmpty {
+            if !evals.isEmpty {
+                let okCount = evals.filter { $0.meets }.count
                 VStack(alignment: .leading, spacing: 10) {
                     SectionTitle(
                         title: "专业录取线",
-                        sub: "\(year) 年 · \(trackLabel(track, DataStore.shared.provinces.first { $0.id == provId }?.mode ?? .t312)) · 共 \(rows.count) 个专业"
+                        sub: "\(year) 年 · \(trackLabel(track, DataStore.shared.provinces.first { $0.id == provId }?.mode ?? .t312))"
+                            + " · 共 \(evals.count) 个专业"
+                            + (okCount == evals.count ? "" : " · 可报 \(okCount) 个")
                     )
-                    ForEach(Array(rows.prefix(10))) { m in
+                    ForEach(Array(evals.prefix(10))) { ev in
+                        let m = ev.major
                         HStack(alignment: .top, spacing: 8) {
                             VStack(alignment: .leading, spacing: 3) {
-                                Text(m.majorName).font(.caption.weight(.semibold)).foregroundStyle(Color.ink900)
-                                Text("最低 \(Int(m.score)) 分"
+                                HStack(spacing: 5) {
+                                    Text(m.majorName)
+                                        .font(.caption.weight(.semibold))
+                                        .foregroundStyle(ev.meets ? Color.ink900 : Color.ink400)
+                                    TierTag(tier: ev.tier)
+                                }
+                                Text("等效分 \(Int(ev.equivScore))"
+                                     + " · 你\(ev.gap >= 0 ? "高出" : "低")\(Int(abs(ev.gap.rounded()))) 分"
+                                     + " · 原分 \(Int(m.score))"
                                      + (m.rank.map { " · 位次 \(Int($0))" } ?? "")
                                      + (m.plan.map { " · 计划 \(Int($0)) 人" } ?? ""))
                                     .font(.caption2).foregroundStyle(Color.ink500)
                             }
                             Spacer()
+                            Text("\(Int(ev.prob * 100))%")
+                                .font(.caption.monospacedDigit().weight(.semibold))
+                                .foregroundStyle(ev.prob >= 0.45 ? Color.good : Color.warn)
                             if let req = m.subjectReq, !req.isEmpty {
                                 Text(req).font(.system(size: 10)).padding(.horizontal, 7).padding(.vertical, 3)
-                                    .background(Capsule().fill(Color.brandSoft)).foregroundStyle(Color.brand)
-                            }
-                            if !subjects.isEmpty && !m.meets(subjects) {
-                                Text("选科不符").font(.system(size: 10)).padding(.horizontal, 7).padding(.vertical, 3)
-                                    .background(Capsule().fill(Color.danger.opacity(0.12))).foregroundStyle(Color.danger)
+                                    .background(Capsule().fill(ev.meets ? Color.brandSoft : Color.danger.opacity(0.12)))
+                                    .foregroundStyle(ev.meets ? Color.brand : Color.danger)
                             }
                         }
                         .padding(.vertical, 5)
                         Divider()
                     }
-                    if rows.count > 10 { Text("仅显示分数最高的 10 个专业").font(.caption2).foregroundStyle(Color.ink400) }
+                    if evals.count > 10 { Text("仅显示概率最高的 10 个专业").font(.caption2).foregroundStyle(Color.ink400) }
+                    Text("专业线是各专业实际录取最低分，通常高于院校投档线；概率按「专业线差法 + 专业位次法」测算，与上方院校级概率口径不同。")
+                        .font(.caption2).foregroundStyle(Color.ink400)
                 }
                 .card()
             }
