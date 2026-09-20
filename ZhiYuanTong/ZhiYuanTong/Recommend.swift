@@ -209,6 +209,12 @@ enum Recommend {
         var obeyAdjust: Bool = true
         var strategy: GenStrategy = .balanced
         var preferProvince: Bool = true
+        /// 考生选考科目（含首选科目）；空 = 未填，不做选科过滤
+        var subjects: [String] = []
+        /// 选科过滤的定位信息：省份 + 科类 + 年份决定用哪一批专业录取线
+        var provId: String = ""
+        var track: Track = .phy
+        var year: Int = 0
 
         static func from(_ p: StudentProfile) -> GenPrefs {
             GenPrefs(
@@ -217,7 +223,11 @@ enum Recommend {
                 hotMajors: p.hotMajors,
                 obeyAdjust: p.obeyAdjust,
                 strategy: p.strategy,
-                preferProvince: p.preferProvince
+                preferProvince: p.preferProvince,
+                subjects: p.subjects,
+                provId: p.provId,
+                track: p.track,
+                year: DataStore.shared.currentYear
             )
         }
     }
@@ -324,7 +334,22 @@ enum Recommend {
      */
     static func genVolunteers(_ list: [Evaluated], prefs: GenPrefs, ds: OfficialDataset? = nil) -> GenResult {
         var res = GenResult()
-        let pool = list.filter { $0.prob >= 0.15 }
+        let candidates = list.filter { $0.prob >= 0.15 }
+        guard !candidates.isEmpty else { return res }
+
+        // 选科硬过滤：只对「有专业录取线数据」的院校生效；该校已录专业都不符合选科要求 → 剔除，避免推荐根本报不了的专业组
+        let majorsByUni = Dictionary(
+            grouping: (ds?.majorAdmissions ?? []).filter { $0.provId == prefs.provId && $0.track == prefs.track && $0.year == prefs.year },
+            by: { normalizeUniName($0.uniName) }
+        )
+        let pool = candidates.filter { e in
+            guard !prefs.subjects.isEmpty, let rows = majorsByUni[normalizeUniName(e.rec.seed.name)] else { return true }
+            return rows.contains { $0.meets(prefs.subjects) }
+        }
+        let blocked = candidates.count - pool.count
+        if blocked > 0 {
+            res.warnings.append("按你的选考科目（\(prefs.subjects.joined(separator: "/"))）剔除了 \(blocked) 所已录专业均不符合选科要求的院校；未导入专业录取线的院校不参与该过滤。")
+        }
         guard !pool.isEmpty else { return res }
         res.pool = pool.count
 

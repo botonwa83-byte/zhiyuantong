@@ -99,7 +99,9 @@
 - [x] 新增测试 `data-pipeline/tests/test_major_admission.py`（manual 本地路径、归一后列与合同一致、重复主键被判阻断）；全量 `pytest` 90 通过
 - [x] App：`OfficialMajorAdmission` + `OfficialDataset.majorAdmissions`（自定义 Codable，**老存档无该键时按空数组处理，不丢档**）、`findMajorAdmissions`、`importMajorAdmissionCsv`、导入页新增「专业录取线」类型、院校详情新增「专业录取线」卡片（带选科要求标签）
 - [x] 选科基础：`Models.swift` 新增 `GAOKAO_SUBJECTS`，`StudentProfile.subjects`（已存在但此前无人填充）；专业行有 `requiredSubjects` 与 `meets(_:)`，考生填了选科会标「选科不符」
-- [ ] 待做（下一轮）：① 档案页增加选科录入 UI（六门多选），② `Recommend` 按选科要求**硬过滤**院校专业组，③ 专业级概率（用专业线替代院校线做等效分测算）
+- [x] 档案页新增「选考科目」多选（3+1+2 首选科目由科类自动补全；3+3 六门任选；老高考不显示），档案概览展示已选科目
+- [x] `Recommend.genVolunteers` 选科**硬过滤**：只对已导入专业录取线的院校生效，该校已录专业无一符合选科 → 剔除并在 warnings 里说明；无专业数据的院校不参与过滤（避免误杀）
+- [ ] 待做（下一轮）：专业级概率——用专业线替代院校线做等效分测算，并在志愿表条目上标注可报专业数
 
 ### 4. 产物与打包（Task 8-10）
 - [ ] `pipeline/build.py` 扩展：分省产物包（web/iOS），按省按需导入（单省 admission ≈ 150KB，20 省 × 3 年 ≈ 9MB）

@@ -51,12 +51,19 @@ struct MeView: View {
                     .font(.subheadline).foregroundStyle(Color.brand)
             }
             HStack(spacing: 8) {
-                MiniStat(label: "省份 / 科类", value: "\(state.prov.name) \(profile.track.label)")
+                MiniStat(label: "省份 / 科类", value: "\(state.prov.name) \(trackLabel(profile.track, state.prov.mode))")
                 MiniStat(label: "分数", value: "\(Int(profile.score))", sub: profile.rank.map { "位次 \(Int($0))" } ?? "位次估算")
             }
             HStack(spacing: 8) {
                 MiniStat(label: "意向城市", value: profile.cities.isEmpty ? "未设置" : profile.cities.joined(separator: "、"))
                 MiniStat(label: "意向学科", value: profile.majors.isEmpty ? "未设置" : profile.majors.joined(separator: "、"))
+            }
+            if state.prov.mode != .old {
+                MiniStat(
+                    label: "选考科目",
+                    value: profile.subjects.isEmpty ? "未设置（不按选科过滤）" : profile.subjects.joined(separator: "/"),
+                    sub: profile.subjects.isEmpty ? "设置后可按专业选科要求过滤" : "导入专业录取线后生效"
+                )
             }
             MiniStat(label: "服从专业调剂", value: profile.obeyAdjust ? "已勾选" : "未勾选", sub: profile.obeyAdjust ? "退档风险低" : "建议勾选以降低退档风险")
         }
@@ -194,11 +201,32 @@ private struct EditProfileSheet: View {
     @State private var rankText = ""
     @State private var cities: [String] = []
     @State private var majors: [String] = []
+    @State private var subjects: [String] = []
     @State private var obey = true
 
     /// 当前所选省份的考试模式：3+3 不分科类，隐藏科类选择器
     private var currentMode: ExamMode {
         DataStore.shared.provinces.first { $0.id == provId }?.mode ?? .t312
+    }
+
+    /// 可选科目：3+1+2 的首选科目由科类决定（物理类=物理、历史类=历史），不重复选；3+3 六门全选；老高考无选科
+    private var subjectOptions: [String] {
+        guard currentMode != .old else { return [] }
+        if currentMode == .t33 { return GAOKAO_SUBJECTS }
+        return GAOKAO_SUBJECTS.filter { $0 != (track == .phy ? "物理" : "历史") }
+    }
+
+    private var trackSubject: String? {
+        currentMode == .t312 ? (track == .phy ? "物理" : "历史") : nil
+    }
+
+    private var footerText: String {
+        switch currentMode {
+        case .t33: return "3+3：勾选你选考的三门；导入「专业录取线」后按选科要求过滤专业"
+        case .old: return ""
+        case .t312:
+            return "3+1+2：首选科目「\(trackSubject ?? "")」由科类决定，这里勾选两门再选科目；导入「专业录取线」后按选科要求过滤专业"
+        }
     }
 
     var body: some View {
@@ -243,6 +271,19 @@ private struct EditProfileSheet: View {
                         }
                     }
                 }
+                if !subjectOptions.isEmpty {
+                    Section(header: Text("选考科目"), footer: Text(footerText)) {
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 8) {
+                                ForEach(subjectOptions, id: \.self) { s in
+                                    Chip(title: s, active: subjects.contains(s)) {
+                                        subjects = subjects.contains(s) ? subjects.filter { $0 != s } : subjects + [s]
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
                 Section("填报偏好") {
                     Toggle("服从专业调剂", isOn: $obey)
                 }
@@ -266,6 +307,7 @@ private struct EditProfileSheet: View {
                 rankText = p.rank.map { String(format: "%.0f", $0) } ?? ""
                 cities = p.cities
                 majors = p.majors
+                subjects = p.subjects.filter { !subjectOptions.isEmpty && subjectOptions.contains($0) }
                 obey = p.obeyAdjust
             }
         }
@@ -282,6 +324,8 @@ private struct EditProfileSheet: View {
             p.rank = rank
             p.cities = cities
             p.majors = majors
+            // 首选科目由科类决定，补全进去，专业选科校验才完整
+            p.subjects = Array(Set(subjects + [trackSubject].compactMap { $0 })).sorted { (GAOKAO_SUBJECTS.firstIndex(of: $0) ?? 9) < (GAOKAO_SUBJECTS.firstIndex(of: $1) ?? 9) }
             p.obeyAdjust = obey
         }
     }
