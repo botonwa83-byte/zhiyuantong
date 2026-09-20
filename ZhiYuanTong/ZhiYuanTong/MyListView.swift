@@ -4,6 +4,8 @@ import SwiftUI
 struct MyListView: View {
     @EnvironmentObject var state: AppState
     @State private var showGen = false
+    /// 展开了「可报专业清单」的院校名（导入专业录取线后才有点开的意义）
+    @State private var expanded: Set<String> = []
 
     private var items: [VolunteerItem] { state.volunteers }
     private var evalByName: [String: Evaluated] {
@@ -199,11 +201,9 @@ struct MyListView: View {
                         let empItem = EmploymentModel.forecast(name: v.uniName, state.dataset)
                         Text(rowSub(e: e, emp: empItem))
                             .font(.caption2).foregroundStyle(Color.ink400)
-                        let majors = majorInfo(v.uniName)
-                        if let majors {
-                            Text(majors)
-                                .font(.system(size: 10))
-                                .foregroundStyle(majors.contains("无可报") ? Color.danger : Color.good)
+                        let evals = state.majorEvals(v.uniName)
+                        if !evals.isEmpty {
+                            majorDisclosure(v.uniName, evals: evals)
                         }
                         if let note = v.note, !note.isEmpty {
                             Text(note).font(.system(size: 10)).foregroundStyle(Color.brand)
@@ -234,15 +234,73 @@ struct MyListView: View {
         .card()
     }
 
-    /// 导入了专业录取线时，标注该志愿的可报专业数（按考生选科过滤）
-    private func majorInfo(_ uniName: String) -> String? {
-        let evals = state.majorEvals(uniName)
-        guard !evals.isEmpty else { return nil }
-        let ok = evals.filter { $0.meets }
-        guard !ok.isEmpty else { return "无可报专业（\(evals.count) 个专业均不符合选科）" }
+    /// 导入了专业录取线时，标注该志愿的可报专业数（按考生选科过滤），点开可看专业级概率
+    private func majorDisclosure(_ uniName: String, evals: [MajorEval]) -> some View {
+        let ok = evals.filter(\.meets)
+        let open = expanded.contains(uniName)
+        return VStack(alignment: .leading, spacing: 6) {
+            Button {
+                withAnimation(.easeOut(duration: 0.15)) {
+                    if open { expanded.remove(uniName) } else { expanded.insert(uniName) }
+                }
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: open ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 9))
+                        .foregroundStyle(Color.ink400)
+                    Text(majorSummary(ok: ok, total: evals.count))
+                        .font(.system(size: 10))
+                        .foregroundStyle(ok.isEmpty ? Color.danger : Color.good)
+                    Spacer()
+                }
+            }
+            .buttonStyle(.plain)
+
+            if open {
+                VStack(alignment: .leading, spacing: 5) {
+                    ForEach(Array(evals.prefix(12))) { ev in
+                        HStack(alignment: .center, spacing: 6) {
+                            Text(ev.major.majorName)
+                                .font(.caption)
+                                .foregroundStyle(ev.meets ? Color.ink900 : Color.ink400)
+                            if !ev.meets {
+                                Text("选科不符")
+                                    .font(.system(size: 9)).padding(.horizontal, 5).padding(.vertical, 2)
+                                    .background(Capsule().fill(Color.danger.opacity(0.12))).foregroundStyle(Color.danger)
+                            } else if let req = ev.major.subjectReq, !req.isEmpty {
+                                Text(req)
+                                    .font(.system(size: 9)).padding(.horizontal, 5).padding(.vertical, 2)
+                                    .background(Capsule().fill(Color.brandSoft)).foregroundStyle(Color.brand)
+                            }
+                            Spacer()
+                            if ev.meets { TierTag(tier: ev.tier) }
+                            Text("\(Int(ev.prob * 100))%")
+                                .font(.caption.monospacedDigit().weight(.medium))
+                                .foregroundStyle(ev.prob >= 0.45 ? Color.good : Color.warn)
+                        }
+                        Text("等效分 \(Int(ev.equivScore))"
+                             + " · 你\(ev.gap >= 0 ? "高出" : "低")\(Int(abs(ev.gap.rounded()))) 分"
+                             + (ev.major.plan.map { " · 计划 \(Int($0)) 人" } ?? ""))
+                            .font(.system(size: 10)).foregroundStyle(Color.ink400)
+                    }
+                    if evals.count > 12 {
+                        Text("仅显示概率最高的 12 个专业，完整清单见院校详情")
+                            .font(.system(size: 10)).foregroundStyle(Color.ink400)
+                    }
+                    Text("专业按录取概率排序；实际填报时把更想去的专业写在前面（专业优先省份尤其重要），并确认勾选服从调剂。")
+                        .font(.system(size: 10)).foregroundStyle(Color.ink400)
+                }
+                .padding(.leading, 12)
+                .transition(.opacity)
+            }
+        }
+    }
+
+    private func majorSummary(ok: [MajorEval], total: Int) -> String {
+        guard !ok.isEmpty else { return "无可报专业（\(total) 个专业均不符合选科）" }
         let safe = ok.filter { $0.prob >= 0.45 }.count
         let top = ok[0]
-        return "可报专业 \(ok.count)/\(evals.count) 个 · 稳妥 \(safe) 个 · 最稳 \(top.major.majorName) \(Int(top.prob * 100))%"
+        return "可报专业 \(ok.count)/\(total) 个 · 稳妥 \(safe) 个 · 最稳 \(top.major.majorName) \(Int(top.prob * 100))%"
     }
 
     private func rowSub(e: Evaluated?, emp: EmploymentForecast?) -> String {

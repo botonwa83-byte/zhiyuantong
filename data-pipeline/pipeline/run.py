@@ -9,7 +9,7 @@ from pathlib import Path
 import pandas as pd
 
 from pipeline.config import SourceSpec, list_provinces, load_province_config
-from pipeline.derive import derive_university_rows
+from pipeline.derive import derive_university_rows, reconcile_min_rank
 from pipeline.fetch import archive_path, resolve_url
 from pipeline.normalize import normalize_rows
 from pipeline.parse import parse_source
@@ -87,10 +87,17 @@ def run_province(
             entry.update({"status": "ok", "rows": len(df)})
             report["sources"].append(entry)
 
+    # 位次口径校正要用一分一段表，先单独合并出来（frames 的顺序取决于 sources 顺序）
+    rank_df = pd.concat(frames["rank_table"], ignore_index=True) if frames.get("rank_table") else pd.DataFrame()
+
     for kind, parts in frames.items():
         merged = pd.concat(parts, ignore_index=True) if parts else pd.DataFrame()
         if kind == "university_meta" and not merged.empty:
             merged = merged.drop_duplicates(subset=["uni_code", "uni_name"], keep="first")
+        if kind in ("admission", "major_admission") and not merged.empty and not rank_df.empty:
+            merged, stats = reconcile_min_rank(merged, rank_df)
+            if stats:
+                report.setdefault("rank_reconcile", {})[kind] = stats
         write_table(merged, kind, staging_dir)
         report[f"{kind}_rows"] = len(merged)
 

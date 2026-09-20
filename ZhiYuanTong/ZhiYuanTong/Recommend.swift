@@ -215,6 +215,8 @@ enum Recommend {
         var provId: String = ""
         var track: Track = .phy
         var year: Int = 0
+        /// 考生分数：专业级概率测算要用
+        var score: Double = 0
 
         static func from(_ p: StudentProfile) -> GenPrefs {
             GenPrefs(
@@ -227,7 +229,8 @@ enum Recommend {
                 subjects: p.subjects,
                 provId: p.provId,
                 track: p.track,
-                year: DataStore.shared.currentYear
+                year: DataStore.shared.currentYear,
+                score: p.score
             )
         }
     }
@@ -363,6 +366,25 @@ enum Recommend {
         guard !pool.isEmpty else { return res }
         res.pool = pool.count
 
+        // 专业级概率：专业等效分 = 院校等效分 + (专业最低分 − 院校最低分)（等价于「线差不变」），
+        // 再按 σ≈7 分的线差法估概率。用来判断「院校线够得上，但你能报的专业够不着」这类假稳志愿。
+        let uniMinByUni: [String: Double] = {
+            var out: [String: Double] = [:]
+            for a in ds?.admissions ?? [] where a.provId == prefs.provId && a.track == prefs.track && a.year == prefs.year {
+                let k = normalizeUniName(a.uniName)
+                out[k] = Swift.min(out[k] ?? .infinity, a.score)
+            }
+            return out
+        }()
+        func majorProbs(_ e: Evaluated) -> [Double] {
+            let key = normalizeUniName(e.rec.seed.name)
+            guard !prefs.subjects.isEmpty, let rows = majorsByUni[key], let uniMin = uniMinByUni[key] else { return [] }
+            return rows.filter { $0.meets(prefs.subjects) }.map { m in
+                let eq = e.rec.equivScore + (m.score - uniMin)
+                return clamp(1 / (1 + exp(-1.35 * ((prefs.score - eq) / 7))), 0.01, 0.97)
+            }
+        }
+
         let empMap = EmploymentModel.allForecasts(ds)
         var hits: [String: [String]] = [:]
         for e in pool {
@@ -441,7 +463,23 @@ enum Recommend {
             }
             if prefs.cities.contains(e.rec.seed.city) { tags.append("意向城市") }
             if e.rec.inProvince { tags.append("本省院校") }
+            let mp = majorProbs(e)
+            if !mp.isEmpty {
+                let safe = mp.filter { $0 >= 0.45 }.count
+                tags.append(safe > 0 ? "可报专业 \(mp.count) 个（稳妥 \(safe) 个）" : "可报专业 \(mp.count) 个但均需冲刺")
+            }
             return tags.isEmpty ? nil : tags.joined(separator: " · ")
+        }
+
+        // 院校线看起来稳、可报专业却都够不着 → 提示实际把握低于院校线
+        let falseSafety = ordered.filter { _, e in
+            guard let best = majorProbs(e).max() else { return false }
+            return e.prob >= 0.45 && best < 0.35
+        }
+        if !falseSafety.isEmpty {
+            res.warnings.append(
+                "\(falseSafety.prefix(3).map { $0.1.rec.seed.name }.joined(separator: "、"))等 \(falseSafety.count) 所院校投档线够得上，但你能报的专业分数线明显更高（多为该校高分专业组或热门专业），实际录取把握低于院校线，填报前请点开专业清单确认。"
+            )
         }
 
         res.items = ordered.map { tier, e in

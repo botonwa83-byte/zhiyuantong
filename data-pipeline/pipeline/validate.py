@@ -8,6 +8,7 @@ from pathlib import Path
 import pandas as pd
 
 from pipeline.contract import TABLES
+from pipeline.derive import interpolated_rank
 from pipeline.staging import read_table
 
 VALID_TRACKS = {"phy", "his"}
@@ -77,25 +78,6 @@ def _rank_lookup(rank_table: pd.DataFrame) -> dict[tuple, list[tuple[float, floa
         pairs = pairs.sort_values("score").values.tolist()
         lookup[(prov_id, year, track)] = [(float(s), float(r)) for s, r in pairs]
     return lookup
-
-
-def _interpolated_rank(pairs: list[tuple[float, float]], score: float) -> float | None:
-    """表内插值；分数落在表覆盖范围之外时返回 None（不比对，避免误判）。"""
-    if not pairs:
-        return None
-    if score > pairs[-1][0] or score < pairs[0][0]:
-        return None
-    if score == pairs[0][0]:
-        return pairs[0][1]
-    if score == pairs[-1][0]:
-        return pairs[-1][1]
-    for (s1, r1), (s2, r2) in zip(pairs, pairs[1:]):
-        if s1 <= score <= s2:
-            span = s2 - s1
-            if span == 0:
-                return min(r1, r2)
-            return r1 + (r2 - r1) * (score - s1) / span
-    return pairs[-1][1]
 
 
 def _check_common(df: pd.DataFrame, kind: str) -> list[Issue]:
@@ -173,7 +155,7 @@ def _check_admission(df: pd.DataFrame, rank_lookup: dict) -> list[Issue]:
         if score is None or rank is None:
             continue
         pairs = rank_lookup.get((row["prov_id"], row["year"], row["track"]))
-        expected = _interpolated_rank(pairs, score) if pairs else None
+        expected = interpolated_rank(pairs, score) if pairs else None
         if not expected:
             continue
         if abs(rank - expected) / expected > RANK_TOLERANCE:

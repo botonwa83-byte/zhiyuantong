@@ -442,9 +442,72 @@ func importRankCsv(_ text: String, ctx: ImportContext, into ds: inout OfficialDa
     let incoming = res.data
     ds.rankTables.removeAll { t in incoming.contains { $0.provId == t.provId && $0.year == t.year && $0.track == t.track } }
     ds.rankTables.append(contentsOf: incoming)
+    // 先导入投档线、后导入一分一段表的情况：回头把已入库的位次再校正一遍
+    let (fixedAdm, refilledAdm) = reconcileAdmissionRanks(ds.admissions, ds: ds)
+    if refilledAdm > 0 { ds.admissions = fixedAdm }
+    let (fixedMajor, refilledMajor) = reconcileMajorRanks(ds.majorAdmissions, ds: ds)
+    if refilledMajor > 0 { ds.majorAdmissions = fixedMajor }
     ds.updatedAt = Date().timeIntervalSince1970 * 1000
     let msgs = incoming.map { "\($0.provId)/\($0.year)/\($0.track.label)：\($0.points.count) 个分数点" }
-    return ImportReport(ok: true, rows: res.rows, messages: msgs + res.warnings)
+    var warnings = res.warnings
+    let refilled = refilledAdm + refilledMajor
+    if refilled > 0 {
+        warnings.append("已按新导入的一分一段表复核，重算 \(refilled) 条口径不符的历史位次（投档线 \(refilledAdm) 条、专业线 \(refilledMajor) 条）。")
+    }
+    return ImportReport(ok: true, rows: res.rows, messages: msgs + warnings)
+}
+
+/// 一分一段表内插值；分数落在表覆盖范围之外返回 nil（不比对，避免误判）
+func interpolatedRank(_ table: RankTable, _ score: Double) -> Double? {
+    let pts = table.points.sorted { $0.score < $1.score }
+    guard let first = pts.first, let last = pts.last, score >= first.score, score <= last.score else { return nil }
+    if score == first.score { return first.rank }
+    if score == last.score { return last.rank }
+    for i in 0..<(pts.count - 1) {
+        let a = pts[i], b = pts[i + 1]
+        if score >= a.score && score <= b.score {
+            let span = b.score - a.score
+            return span == 0 ? min(a.rank, b.rank) : a.rank + (b.rank - a.rank) * (score - a.score) / span
+        }
+    }
+    return last.rank
+}
+
+/**
+ * 位次口径校正：导入的位次与已导入的一分一段表严重不符时，按一分一段表重算。
+ *
+ * 常见坑：Gaokao-Compass 等聚合数据源的 min_rank 填的其实是「最高分位次」——河南 2025 全部 511 条
+ * 系统性偏小（中位仅期望值的 0.68 倍，北大医学部 674 分标 82 位，而 82 位实际对应 702 分）。
+ * 错误位次比没有位次更危险：位次法概率会据此把院校判成「几乎不可能」。宁缺勿错，只留分数走线差法。
+ */
+func reconcileAdmissionRanks(_ rows: [OfficialAdmission], ds: OfficialDataset) -> ([OfficialAdmission], Int) {
+    var refilled = 0
+    let out = rows.map { a -> OfficialAdmission in
+        guard let r = a.rank, r > 0,
+              let t = ds.rankTables.first(where: { $0.provId == a.provId && $0.year == a.year && $0.track == a.track }),
+              let exp = interpolatedRank(t, a.score), exp > 0, abs(r - exp) / exp > 0.4
+        else { return a }
+        var c = a
+        c.rank = exp
+        refilled += 1
+        return c
+    }
+    return (out, refilled)
+}
+
+func reconcileMajorRanks(_ rows: [OfficialMajorAdmission], ds: OfficialDataset) -> ([OfficialMajorAdmission], Int) {
+    var refilled = 0
+    let out = rows.map { m -> OfficialMajorAdmission in
+        guard let r = m.rank, r > 0,
+              let t = ds.rankTables.first(where: { $0.provId == m.provId && $0.year == m.year && $0.track == m.track }),
+              let exp = interpolatedRank(t, m.score), exp > 0, abs(r - exp) / exp > 0.4
+        else { return m }
+        var c = m
+        c.rank = exp
+        refilled += 1
+        return c
+    }
+    return (out, refilled)
 }
 
 func importAdmissionCsv(_ text: String, ctx: ImportContext, into ds: inout OfficialDataset) -> ImportReport {
@@ -452,7 +515,11 @@ func importAdmissionCsv(_ text: String, ctx: ImportContext, into ds: inout Offic
     guard !res.data.isEmpty else {
         return ImportReport(ok: false, rows: 0, messages: res.warnings.isEmpty ? ["未解析到有效数据"] : res.warnings)
     }
-    let incoming = res.data
+    let (incoming, refilled) = reconcileAdmissionRanks(res.data, ds: ds)
+    var warnings = res.warnings
+    if refilled > 0 {
+        warnings.append("有 \(refilled) 条位次与已导入的一分一段表严重不符（多为「最高分位次」或跨年串数据），已按一分一段表重算。")
+    }
     ds.admissions.removeAll { a in
         incoming.contains { n in
             n.provId == a.provId && n.track == a.track && n.year == a.year
@@ -465,7 +532,7 @@ func importAdmissionCsv(_ text: String, ctx: ImportContext, into ds: inout Offic
     let provs = Array(Set(incoming.map(\.provId))).sorted()
     return ImportReport(
         ok: true, rows: res.rows,
-        messages: ["已导入 \(incoming.count) 条投档线（\(provs.joined(separator: "/")) · \(years.map(String.init).joined(separator: "/")) 年）"] + res.warnings
+        messages: ["已导入 \(incoming.count) 条投档线（\(provs.joined(separator: "/")) · \(years.map(String.init).joined(separator: "/")) 年）"] + warnings
     )
 }
 
@@ -526,7 +593,11 @@ func importMajorAdmissionCsv(_ text: String, ctx: ImportContext, into ds: inout 
     guard !res.data.isEmpty else {
         return ImportReport(ok: false, rows: 0, messages: res.warnings.isEmpty ? ["未解析到有效数据"] : res.warnings)
     }
-    let incoming = res.data
+    let (incoming, refilled) = reconcileMajorRanks(res.data, ds: ds)
+    var warnings = res.warnings
+    if refilled > 0 {
+        warnings.append("有 \(refilled) 条位次与已导入的一分一段表严重不符，已按一分一段表重算。")
+    }
     ds.majorAdmissions.removeAll { m in
         incoming.contains { n in
             n.provId == m.provId && n.track == m.track && n.year == m.year
@@ -538,7 +609,7 @@ func importMajorAdmissionCsv(_ text: String, ctx: ImportContext, into ds: inout 
     let withReq = incoming.filter { !($0.subjectReq ?? "").isEmpty }.count
     return ImportReport(
         ok: true, rows: res.rows,
-        messages: ["已导入 \(incoming.count) 条专业录取线，其中 \(withReq) 条带选科要求"] + res.warnings
+        messages: ["已导入 \(incoming.count) 条专业录取线，其中 \(withReq) 条带选科要求"] + warnings
     )
 }
 

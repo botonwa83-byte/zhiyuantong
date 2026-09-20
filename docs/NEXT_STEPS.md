@@ -21,8 +21,8 @@
 | `dist/universities_full.csv` | 608 所，App 可直接导入（`uni_code,name,prov,city,level,kind,nature`） |
 | `providers/prov_pdf.py` | **新增**：考试院一分一段 PDF 解析器（待真实 PDF 验证） |
 | `configs/provinces/*.toml` | **新增**：31 省配置骨架（对齐 App 省份清单） |
-| 校验 | 阻断 0 / 警告 512（位次口径偏差，进复核队列，不阻断） |
-| 单测 | **87 passed**（`python -m pytest tests -q`） |
+| 校验 | 阻断 0 / 警告 1（历史类缺一分一段表）；位次口径已自动校正（原 512 条，见 §3.10） |
+| 单测 | **101 passed**（`python -m pytest tests -q`） |
 
 已实现模块：`config` `contract` `providers/{base,hf_csv,html_table,manual,xls,prov_pdf}` `parse` `normalize` `validate` `staging` `years` `derive` `build` `run`。
 
@@ -103,7 +103,9 @@
 - [x] `Recommend.genVolunteers` 选科**硬过滤**：只对已导入专业录取线的院校生效，该校已录专业无一符合选科 → 剔除并在 warnings 里说明；无专业数据的院校不参与过滤（避免误杀）
 - [x] 专业级概率（2026-09-20 完成）：`Engine` 新增 `MajorEval` / `equivScore(ofMajor:)` / `evaluateMajors(_:)`——专业线按「线差不变」折算今年等效分，概率 = 线差法（σ≈7 分）为主，有专业位次时位次法加权 35%；`AppState.majorEvals(_:)` 按档案实时算
 - [x] 展示：院校详情「专业录取线」卡片改为概率排序 + 等效分 + 冲稳保标签 + 可报专业数；志愿表每行标注「可报专业 N/M 个 · 稳妥 K 个 · 最稳 XX 65%」；生成向导对「符合选科专业不足 3 个」的院校给出警告
-- [ ] 待做（下一轮）：志愿条目上直接展开「可报专业清单」（点开看专业级概率），以及专业级「冲稳保」分层生成
+- [x] 志愿条目展开「可报专业清单」（2026-09-20）：点开显示该校专业级概率（等效分/分差/计划/冲稳保/选科要求，限 12 条）
+- [x] 专业级信息进入生成结果：推荐理由带「可报专业 N 个（稳妥 K 个）」；院校线够得上但可报专业都够不着的「假稳」志愿会给出警告
+- [ ] 待做（下一轮）：31 省批量首跑（先跑通 `--all --year 2025` 的下载清单与缺失统计）
 
 ### 3.9 分省产物包（2026-09-20 完成，App 可直接导入）
 - [x] `pipeline/build.py` 新增 `build_app_imports()`：从 staging 导出 `dist/app_import/{prov}_rank.csv`、`{prov}_admission.csv`、`{prov}_major.csv`，表头与 App 导入页模板一致
@@ -112,9 +114,15 @@
 - [x] CLI：`python -m pipeline.build --prov henan [--only app-import|universities]`；新增 `tests/test_build_app_imports.py`（4 项），全量 `pytest` 94 通过
 - [x] `dist/` 加入 `.gitignore`（生成物，可随时重跑）
 
+### 3.10 位次口径校正（2026-09-20 完成，512 条复核队列已定位根因）
+- [x] 根因：Gaokao-Compass 的 `school-admission` 里 `min_rank` **不是最低分位次**，河南 2025 物理类 706 条可比行**全部**系统性偏小（中位仅期望值的 0.677 倍）——北大医学部 674 分标 82 位，而 82 位在河南对应 702 分，疑似填的是最高分位次。错误位次比没有位次更危险：App 的位次法概率会据此把院校判成「几乎不可能」
+- [x] 管道：`pipeline/derive.py` 新增 `rank_lookup` / `interpolated_rank` / `reconcile_min_rank`，`run.py` 落库前对 admission、major_admission 校正；河南 2025 结果：511 条按一分一段表**重算**（674 分 82 → 1917）、968 条（历史类 + 表外分数）置空，警告 512 → 1
+- [x] 两阶段判定：① 逐行比对偏差 > 5% 即重算（refill=False 可改为置空）；② 某来源可比行过半不符 → 判该来源口径整体不可用，**包括无法逐行比对的科类**（河南历史类缺一分一段表）位次一并置空，避免同源错误数据留库
+- [x] App：`Dataset.swift` 新增 `interpolatedRank` / `reconcileAdmissionRanks` / `reconcileMajorRanks`，导入投档线/专业线时若位次与已导入的一分一段表偏差 > 40% 即按表重算；**先导入投档线、后导入一分一段表**的情况会在导入一分一段表时回溯重算
+- [x] 新增 `tests/test_reconcile_rank.py`（7 项），全量 `pytest` 101 通过
+
 ### 4. 产物与打包（Task 8-10）
 - [ ] 多省批量：把 31 省骨架逐一跑通首年数据（当前只有河南 2025 全链路）
-- [ ] 复核队列：处理 512 条位次口径警告，确认是源数据问题还是解析问题
 - [ ] 产物分发方式：目前产物 CSV 需手工传进手机再在 App 里导入，后续可考虑打包成 `.zyt` 数据集文件或直接在 App 内置按省下载
 
 ## 四、已知坑（避免重复踩）
@@ -128,6 +136,7 @@
 - **科类口径（2026-09-20）**：3+3 六省（山东/浙江/北京/天津/上海/海南）**不分科类**，不要给物理/历史两套线（`export-data.ts` 导出时会报错）；文理分科省份的数据行里 **phy 列是理科、his 列是文科**，别按物理/历史理解；新疆/西藏 2027 年才首考新高考，2026 及以前的届次按文理分科处理，2027 年起才切 3+1+2。科类文案一律走 `trackLabel(_:_:)`。
 - **掌上高考（m.gaokao.cn）只能人工用**：数据到专业级很全，但接口是抓包得到的非公开 API、有反爬与服务条款约束，且是二次聚合数据。**只做人工浏览器核对 / 人工导出 CSV 进 `manual` provider，不写爬虫**；一手源优先（各省教育考试院一分一段 PDF、投档线，阳光高考 `gaokao.chsi.com.cn`）。
 - **3+3 省份不要加 `track_filter`**：数据集只有一个"综合"轨，`track_filter = ["物理类","历史类"]` 会把行全滤掉导致「解析出 0 行」报错。3+3 省份的 toml 里已改为注释说明。
+- **聚合数据源的 min_rank 不可信（2026-09-20）**：Gaokao-Compass `school-admission` 的 `min_rank` 疑似「最高分位次」，河南 2025 全部系统性偏小（中位 0.677 倍）。管道 `reconcile_min_rank` 已自动按一分一段表重算/置空，App 导入时也会重算。**新增数据源时先跑一遍看 run_report 里的 `rank_reconcile`**，出现 `unreliable_sources` 就说明该源位次不能用。
 - **多省批量跑的告警计数**：`staging/` 是共享的，各省报告里若各自跑 `validate_staging` 会把同一批告警重复计 N 次；现已改成跑完全部省份统一校验一次，`run_report.json` 结构为 `{years, provinces[], blocking_issues, warning_issues, issues}`。
 - **App 院校属地 id**：`ZhiYuanTong/Scripts/data/universities.ts` 里 6 所陕西高校（西安交大、西工大、西北农林、西电、陕师大、西安理工）曾误写 `shanxi`（山西），已修正为 `shaanxi`。新增院校数据时注意 `shanxi`(山西) / `shaanxi`(陕西) 的拼写。
 
