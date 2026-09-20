@@ -1,0 +1,28 @@
+name = "青海"
+mode = "3+1+2"
+
+# 数据集目录名沿用 App 的省份 id（src/data/provinces*.ts）；若数据集用别的拼写，
+# 只改下面两个 url_template 的目录段即可，其余配置无需动。
+# 用法：`python -m pipeline.run --all --year 2025 --list` 导出需人工下载的清单。
+
+[[sources]]
+kind = "rank_table"
+url_template = "https://hf-mirror.com/datasets/choucsan/Gaokao-Compass-11M/resolve/main/data/{year}/qinghai/score-range.csv"
+parser = "hf_csv"
+
+[sources.options]
+dataset = "score-range"
+column_map = { score = "score", cumulative_count = "rank", segment_count = "cum_count", category = "track" }
+track_filter = ["物理类", "历史类"]
+
+[[sources]]
+kind = "admission"
+url_template = "https://hf-mirror.com/datasets/choucsan/Gaokao-Compass-11M/resolve/main/data/{year}/qinghai/school-admission.csv"
+parser = "hf_csv"
+
+[sources.options]
+dataset = "school-admission"
+column_map = { university_name = "uni_name", university_code = "uni_code", min_score = "min_score", min_rank = "min_rank", category = "track", batch = "batch", major_group = "group", subject_req = "subject_req", admit_count = "plan", school_province = "uni_prov", school_nature = "nature", is_985 = "is_985", is_211 = "is_211" }
+fallback_columns = { group = "subject_req" }
+track_filter = ["物理类", "历史类"]
+

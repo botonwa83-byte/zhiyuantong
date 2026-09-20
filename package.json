@@ -1,0 +1,17 @@
+{
+  "name": "zhiyuantong",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "志愿通 —— 原生 SwiftUI App（ZhiYuanTong/）。根目录仅保留数据管道与数据集导出脚本，已无 Web 前端代码。",
+  "scripts": {
+    "data:ios": "bash ZhiYuanTong/Scripts/sync-data.sh",
+    "data:validate": "cd data-pipeline && .venv/bin/python -m pytest -q",
+    "data:run": "cd data-pipeline && .venv/bin/python -m pipeline.run",
+    "data:build": "cd data-pipeline && .venv/bin/python -m pipeline.run --all && .venv/bin/python -m pipeline.build",
+    "native:open": "open ZhiYuanTong/ZhiYuanTong.xcodeproj"
+  },
+  "devDependencies": {
+    "esbuild": "^0.24.0"
+  }
+}

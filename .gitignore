@@ -1,0 +1,20 @@
+node_modules
+.DS_Store
+*.local
+.npm-cache
+
+# 原生 iOS/macOS 工程（XcodeGen 生成，勿改签名设置）：本地产物不入库
+ZhiYuanTong/build
+ZhiYuanTong/DerivedData
+ZhiYuanTong/*.xcodeproj/xcuserdata
+ZhiYuanTong/*.xcodeproj/project.xcworkspace/xcuserdata
+
+# 数据集导出脚本的临时目录
+.export-data.tmp
+
+# 数据管道：原始抓取存档、虚拟环境、第三方基线数据不入库
+data-pipeline/raw
+data-pipeline/.venv
+data-pipeline/baseline
+data-pipeline/.pytest_cache
+data-pipeline/**/__pycache__

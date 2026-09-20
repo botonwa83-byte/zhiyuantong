@@ -1,0 +1,29 @@
+{
+  "prov_id": "henan",
+  "years": [
+    2025
+  ],
+  "sources": [
+    {
+      "kind": "rank_table",
+      "year": 2025,
+      "parser": "hf_csv",
+      "status": "ok",
+      "rows": 225
+    },
+    {
+      "kind": "admission",
+      "year": 2025,
+      "parser": "hf_csv",
+      "status": "ok",
+      "rows": 1687
+    }
+  ],
+  "unmatched_universities": 1664,
+  "blocking_issues": 0,
+  "issues": [],
+  "rank_table_rows": 225,
+  "admission_rows": 1687,
+  "university_meta_rows": 609,
+  "warning_issues": 512
+}
