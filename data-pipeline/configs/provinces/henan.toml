@@ -40,6 +40,8 @@ track_filter = ["物理类", "历史类"]
 [[sources]]
 kind = "major_admission"
 url_template = "https://www.haeea.cn/"
+disabled = true
+note = "源取回的是反爬 HTML 页面（raw/henan/2025/major_admission_major.csv），需人工按 templates/major_admission_template.csv 录入后启用"
 parser = "manual"
 
 [sources.options]

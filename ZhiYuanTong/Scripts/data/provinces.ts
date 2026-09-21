@@ -1,9 +1,9 @@
 import type { Province, Track, YearLines } from '../types'
 import { extraProvinces } from './provincesExtra'
 
-/** 用于趋势分析与等效分换算的历史年份（近三年） */
-export const HISTORY_YEARS = [2022, 2023, 2024] as const
-/** 当前填报年份（其批次线默认继承上一年，可在档案页校准） */
+/** 用于趋势分析与等效分换算的历史年份（近三年；2025 年起内置真实一分一段表与投档线） */
+export const HISTORY_YEARS = [2023, 2024, 2025] as const
+/** 当前填报年份：批次线、一分一段表与投档线均按考生省份自动取用该年份的内置数据 */
 export const CURRENT_YEAR = 2025
 
 function pair(phy: YearLines, his: YearLines): Record<Track, YearLines> {

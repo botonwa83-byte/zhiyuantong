@@ -25,7 +25,7 @@ struct ProvinceTrendPoint: Identifiable {
     var id: Int { year }
 }
 
-/// 专业级录取评估：用「专业录取线」替代院校投档线做等效分测算（需要导入专业录取线数据）
+/// 专业级录取评估：用「专业录取线」替代院校投档线做等效分测算（需要内置专业录取线数据）
 struct MajorEval: Identifiable {
     let major: OfficialMajorAdmission
     /// 专业最低分按「线差不变」折算到今年的等效分
@@ -56,10 +56,16 @@ final class AdmissionEngine {
     let store: DataStore
     /// 当前生效的官方数据集：有一分一段表时位次换算走真实数据
     var dataset: OfficialDataset
+    /// 投档线索引（`dataset` 变更后需重建，见 buildAdmissionIndex）
+    var admissionIndex: [String: OfficialAdmission] = [:]
+    /// 分批次投档线索引：按批次生成志愿表时用（键含批次，同一院校不同批次分开）
+    var batchIndex: [String: OfficialAdmission] = [:]
 
     init(store: DataStore = .shared, dataset: OfficialDataset = .empty) {
         self.store = store
         self.dataset = dataset
+        self.admissionIndex = buildAdmissionIndex(dataset)
+        self.batchIndex = buildBatchAdmissionIndex(dataset)
     }
 
     // MARK: - 基础换算
@@ -68,9 +74,9 @@ final class AdmissionEngine {
         dataset.rankTables.first { $0.provId == prov.id && $0.year == year && $0.track == track }
     }
 
-    /// 该年该科类批次线（当年未公布时退回上一年）
+    /// 该年该科类批次线（当年尚未公布时回退到最近一年）
     func linesOf(_ prov: Province, _ year: Int, _ track: Track) -> YearLines {
-        prov.lines(year: year, track: track) ?? prov.lines(year: 2024, track: track)!
+        prov.lines(year: year, track: track) ?? prov.linesUpTo(year: year, track: track)!
     }
 
     /// 科类考生数：3+3 为全体；3+1+2 按物理 62% / 历史 38% 拆分；老高考按理科 68% / 文科 32% 拆分
@@ -159,8 +165,14 @@ final class AdmissionEngine {
         "顶尖985": 38, "985": 110, "211": 150, "双一流": 70, "省重点": 240, "普通本科": 360, "民办/独立学院": 460,
     ]
 
+    /**
+     * 构造某校某年的录取记录。
+     * - `batch == nil`：主批次口径（院校库推荐用），按本科批优先取该校在我省的投档线
+     * - `batch != nil`：只认该批次的投档线，取不到就走模型推算（该年该批次可能未招生）
+     */
     private func buildYearAdmission(
-        _ seed: UniversitySeed, _ prov: Province, _ track: Track, _ year: Int, _ base: Double
+        _ seed: UniversitySeed, _ prov: Province, _ track: Track, _ year: Int, _ base: Double,
+        _ batch: BatchKind? = nil
     ) -> YearAdmission {
         let lines = linesOf(prov, year, track)
         let rnd = seeded("\(seed.name)|\(prov.id)|\(track.rawValue)|\(year)")
@@ -183,7 +195,13 @@ final class AdmissionEngine {
             jsRound((Self.levelPlan[seed.level] ?? 200) * scale * (inProvince ? 3.4 : 1) * (0.6 + 0.9 * r3))
         )
 
-        if let official = findAdmission(dataset, seed.name, prov.id, track, year) {
+        let official: OfficialAdmission? = {
+            if let batch {
+                return findBatchAdmission(dataset, index: batchIndex, seed.name, prov.id, track, year, batch)
+            }
+            return findAdmission(dataset, index: admissionIndex, seed.name, prov.id, track, year)
+        }()
+        if let official {
             let score = jsRound(clamp(official.score, lines.college, 750))
             let realDiff = score - lines.special
             let rank = official.rank ?? rankOfScore(prov, year, track, score)
@@ -218,19 +236,31 @@ final class AdmissionEngine {
         )
     }
 
-    func buildRecords(provId: String, track: Track) -> [UniversityRecord] {
+    /**
+     * 构造院校记录列表。
+     * - `batch == nil`：全部院校（院校推荐口径）
+     * - `batch != nil`：**只保留该批次有投档线的院校** —— 该批次没在我省招生的学校，志愿表里根本填不进去
+     */
+    func buildRecords(provId: String, track: Track, batch: BatchKind? = nil) -> [UniversityRecord] {
         let prov = store.province(provId)
         let cur = currentLines(prov, track)
         var records: [UniversityRecord] = []
         for seed in store.seeds {
+            if let batch,
+               findBatchAdmission(dataset, index: batchIndex, seed.name, provId, track, store.currentYear, batch) == nil {
+                continue
+            }
             let base = track == .phy ? seed.base : (seed.baseHis ?? seed.base - 6)
-            let years = store.historyYears.map { buildYearAdmission(seed, prov, track, $0, base) }
-            let diffs = years.map(\.diff)
+            let years = store.historyYears.map { buildYearAdmission(seed, prov, track, $0, base, batch) }
+            // 有内置官方数据的年份只用官方数据：模型推算值不能稀释真实录取线
+            let ref = years.filter { $0.official == true }
+            let basis = ref.isEmpty ? years : ref
+            let diffs = basis.map(\.diff)
             let avgDiff = mean(diffs)
-            let avgRank = jsRound(mean(years.map(\.rank)))
-            let avgScore = jsRound(mean(years.map(\.score)))
+            let avgRank = jsRound(mean(basis.map(\.rank)))
+            let avgScore = jsRound(mean(basis.map(\.score)))
             let volatility = std(diffs)
-            let delta3 = diffs[diffs.count - 1] - diffs[0]
+            let delta3 = diffs.count >= 2 ? diffs[diffs.count - 1] - diffs[0] : 0
             let equivScore = jsRound(cur.special + overFromRank(prov, store.currentYear, track, avgRank))
             records.append(
                 UniversityRecord(

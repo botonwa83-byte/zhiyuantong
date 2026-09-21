@@ -28,7 +28,7 @@ struct ExploreView: View {
                     } else {
                         ForEach(Array(list.prefix(limit).enumerated()), id: \.element.rec.seed.name) { _, e in
                             NavigationLink(value: e.rec.seed.name) {
-                                UniRow(e: e, picked: state.volunteers.contains { $0.uniName == e.rec.seed.name }) {
+                                UniRow(e: e, picked: state.volunteers.contains { $0.uniName == e.rec.seed.name && $0.batch == state.currentBatch }) {
                                     state.addVolunteer(e.rec.seed.name)
                                 }
                             }

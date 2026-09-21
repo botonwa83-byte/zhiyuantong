@@ -6,10 +6,20 @@
 import { writeFileSync, mkdirSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { provinces, CURRENT_YEAR, HISTORY_YEARS } from './data/provinces'
-import { universitySeeds, cityHeat } from './data/universities'
+import { universitySeeds, cityHeat, setImportedUniversities } from './data/universities'
+import { officialUniversitySeeds } from './data/universitiesFromOfficial'
 import { majorProfiles } from './data/majors'
 import { majorCareers, hotMajors, cityCareers } from './data/employment'
-import type { HotMajor, MajorCareer, MajorProfile, Province, Track, UniversitySeed } from './types'
+import { provinceBatches } from './data/batches'
+import type {
+  BatchRule,
+  HotMajor,
+  MajorCareer,
+  MajorProfile,
+  Province,
+  Track,
+  UniversitySeed,
+} from './types'
 
 // 输出路径以调用方的工作目录为准（sync-data.sh 已 cd 到项目根）
 const OUT = resolve(
@@ -88,10 +98,36 @@ function toMajorProfileDTO(p: MajorProfile) {
   }
 }
 
+/** 内置官方数据里的院校（投档线覆盖到的院校）补进院校库，手工标注的条目仍以内置为准 */
+setImportedUniversities(officialUniversitySeeds())
+
+/** 批次规则：缺省字段补齐，Swift 侧全为非可选字段，避免解码失败 */
+function toBatchRuleDTO(r: BatchRule) {
+  return {
+    kind: r.kind,
+    name: r.name,
+    order: r.order,
+    max: r.max,
+    mode: r.mode,
+    unit: r.unit,
+    allowAdjust: r.allowAdjust,
+    majorsPerVol: r.majorsPerVol ?? null,
+    note: r.note ?? null,
+    verified: r.verified ?? false,
+  }
+}
+
 const bundle = {
   currentYear: CURRENT_YEAR,
   historyYears: [...HISTORY_YEARS],
   provinces: provinces.map(toProvinceDTO),
+  batchRules: provinceBatches.map((p) => ({
+    provId: p.provId,
+    year: p.year,
+    earlyGroups: p.earlyGroups ?? [],
+    batches: p.batches.map(toBatchRuleDTO),
+    supplementNote: p.supplementNote ?? null,
+  })),
   universities: universitySeeds().map(toUniversityDTO),
   cityHeat,
   majorProfiles: majorProfiles.map(toMajorProfileDTO),
@@ -113,6 +149,25 @@ for (const p of bundle.provinces) {
   }
 }
 
+// 批次规则校验：省份必须存在、每个省必须有本科批与专科批、order 不重复、志愿数为正
+const KINDS = new Set(['earlyUG', 'undergrad', 'special', 'earlyCollege', 'college', 'supplement'])
+const provIds = new Set(bundle.provinces.map((p) => p.id))
+for (const b of bundle.batchRules) {
+  if (!provIds.has(b.provId)) throw new Error(`批次规则里的省份不存在：${b.provId}`)
+  if (!b.batches.length) throw new Error(`${b.provId} 没有配置任何批次`)
+  if (!b.batches.some((r) => r.kind === 'undergrad')) throw new Error(`${b.provId} 缺少本科批`)
+  if (!b.batches.some((r) => r.kind === 'college' || r.kind === 'earlyCollege')) {
+    throw new Error(`${b.provId} 缺少专科批`)
+  }
+  const orders = new Set<number>()
+  for (const r of b.batches) {
+    if (!KINDS.has(r.kind)) throw new Error(`${b.provId} 未知批次类型：${r.kind}`)
+    if (r.max <= 0) throw new Error(`${b.provId}/${r.name} 志愿数必须为正：${r.max}`)
+    if (orders.has(r.order)) throw new Error(`${b.provId}/${r.name} 录取顺序重复：${r.order}`)
+    orders.add(r.order)
+  }
+}
+
 mkdirSync(dirname(OUT), { recursive: true })
 writeFileSync(OUT, JSON.stringify(bundle), 'utf8')
 
@@ -121,5 +176,6 @@ console.log(
     `省份 ${bundle.provinces.length} · 院校 ${bundle.universities.length} · ` +
     `专业 ${bundle.majorProfiles.length} · 门类 ${bundle.majorCareers.length} · ` +
     `热门专业 ${bundle.hotMajors.length} · 城市 ${bundle.cityCareers.length} · ` +
-    `城市热度 ${Object.keys(bundle.cityHeat).length}`,
+    `城市热度 ${Object.keys(bundle.cityHeat).length} · ` +
+    `批次规则 ${bundle.batchRules.length} 省`,
 )

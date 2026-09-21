@@ -26,7 +26,8 @@
 		563FA2D7EB6660D8F6A0F5C8 /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = E4559111AAE26462B5A7CD30 /* AppState.swift */; };
 		570322883F409E1032E89956 /* MyListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 45EB242E2335E730B5EE8F58 /* MyListView.swift */; };
 		5A0C4A9FE6284A86B58C0C06 /* CareerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8E3AFF0381C668D2BE2E499 /* CareerView.swift */; };
-		5AA42267F85C65668DB1F3A7 /* DataImportView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DEB8C75B9A60CFE17C05FAB6 /* DataImportView.swift */; };
+		9C0FF1C1A1D24E5B8F0A0005 /* OfficialData.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C0FF1C1A1D24E5B8F0A0004 /* OfficialData.swift */; };
+		9C0FF1C1A1D24E5B8F0A0002 /* official in Resources */ = {isa = PBXBuildFile; fileRef = 9C0FF1C1A1D24E5B8F0A0001 /* official */; };
 		5FB3322BD515FAEA00AE745D /* Components.swift in Sources */ = {isa = PBXBuildFile; fileRef = 802ACFD83584B3513998E652 /* Components.swift */; };
 		61198CD2D4C01057FFAA3769 /* MyListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 45EB242E2335E730B5EE8F58 /* MyListView.swift */; };
 		6C2C527364216328F181F2D2 /* Employment.swift in Sources */ = {isa = PBXBuildFile; fileRef = ACEF90ED6B3B38ABD3873D10 /* Employment.swift */; };
@@ -40,7 +41,8 @@
 		91E1C94B5767825B9D4263FF /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = E4559111AAE26462B5A7CD30 /* AppState.swift */; };
 		91F8733547C7B7855F0BC396 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A8EBD8DD7D5FA15AE1012D3B /* Assets.xcassets */; };
 		95AB6D42E0826ED5A9EB3936 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C99B26DC5B1185A556EB892 /* RootView.swift */; };
-		9651BBF4F0338FBB4E96DEE8 /* DataImportView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DEB8C75B9A60CFE17C05FAB6 /* DataImportView.swift */; };
+		9C0FF1C1A1D24E5B8F0A0006 /* OfficialData.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C0FF1C1A1D24E5B8F0A0004 /* OfficialData.swift */; };
+		9C0FF1C1A1D24E5B8F0A0003 /* official in Resources */ = {isa = PBXBuildFile; fileRef = 9C0FF1C1A1D24E5B8F0A0001 /* official */; };
 		9C1D84F5A3557D7EAD43445C /* RNG.swift in Sources */ = {isa = PBXBuildFile; fileRef = 654C6BE1910E612829C9FD7D /* RNG.swift */; };
 		AAF7C28429F77B9BFC6D1012 /* Recommend.swift in Sources */ = {isa = PBXBuildFile; fileRef = E3D23BB054F7AC1C9A00E9C7 /* Recommend.swift */; };
 		ABB694EE851EA7DCE298A39B /* App.swift in Sources */ = {isa = PBXBuildFile; fileRef = 22F96D48FD7AC874FFFE3620 /* App.swift */; };
@@ -78,7 +80,8 @@
 		BFFFC09C9FB531B3058F85E8 /* bundle.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = bundle.json; sourceTree = "<group>"; };
 		C3FC2447AE704E8F67135D7B /* DataStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DataStore.swift; sourceTree = "<group>"; };
 		CEAB7005F8F5D734E68BDE5E /* 志愿通.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "志愿通.app"; sourceTree = BUILT_PRODUCTS_DIR; };
-		DEB8C75B9A60CFE17C05FAB6 /* DataImportView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DataImportView.swift; sourceTree = "<group>"; };
+		9C0FF1C1A1D24E5B8F0A0001 /* official */ = {isa = PBXFileReference; lastKnownFileType = folder; path = official; sourceTree = "<group>"; };
+		9C0FF1C1A1D24E5B8F0A0004 /* OfficialData.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OfficialData.swift; sourceTree = "<group>"; };
 		E3D23BB054F7AC1C9A00E9C7 /* Recommend.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Recommend.swift; sourceTree = "<group>"; };
 		E4559111AAE26462B5A7CD30 /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppState.swift; sourceTree = "<group>"; };
 		E8E3AFF0381C668D2BE2E499 /* CareerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CareerView.swift; sourceTree = "<group>"; };
@@ -91,6 +94,7 @@
 			isa = PBXGroup;
 			children = (
 				BFFFC09C9FB531B3058F85E8 /* bundle.json */,
+				9C0FF1C1A1D24E5B8F0A0001 /* official */,
 			);
 			path = Data;
 			sourceTree = "<group>";
@@ -113,7 +117,7 @@
 				ED18CA89E135A125DA72F23F /* Biometrics.swift */,
 				E8E3AFF0381C668D2BE2E499 /* CareerView.swift */,
 				802ACFD83584B3513998E652 /* Components.swift */,
-				DEB8C75B9A60CFE17C05FAB6 /* DataImportView.swift */,
+				9C0FF1C1A1D24E5B8F0A0004 /* OfficialData.swift */,
 				529773A1C4BD03172181E97B /* Dataset.swift */,
 				C3FC2447AE704E8F67135D7B /* DataStore.swift */,
 				ACEF90ED6B3B38ABD3873D10 /* Employment.swift */,
@@ -228,6 +232,7 @@
 				91F8733547C7B7855F0BC396 /* Assets.xcassets in Resources */,
 				B14CED4B95ABF266F46CB755 /* PrivacyInfo.xcprivacy in Resources */,
 				06D73AE3EF95783D60C75151 /* bundle.json in Resources */,
+				9C0FF1C1A1D24E5B8F0A0002 /* official in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -238,6 +243,7 @@
 				FC39CA2852DC6E9A3F3A42E3 /* Assets.xcassets in Resources */,
 				CFEAAD909294C58B0AB83538 /* PrivacyInfo.xcprivacy in Resources */,
 				7915D4BB0822F669C54CF881 /* bundle.json in Resources */,
+				9C0FF1C1A1D24E5B8F0A0003 /* official in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -253,7 +259,7 @@
 				88EECCB69BF4AC7B8E8E191B /* Biometrics.swift in Sources */,
 				87D32ABB6EDBC09378416AB6 /* CareerView.swift in Sources */,
 				5FB3322BD515FAEA00AE745D /* Components.swift in Sources */,
-				5AA42267F85C65668DB1F3A7 /* DataImportView.swift in Sources */,
+				9C0FF1C1A1D24E5B8F0A0005 /* OfficialData.swift in Sources */,
 				2BF64B5BFB9CE6A1F4982FCC /* DataStore.swift in Sources */,
 				50A81494247E5D29708AC562 /* Dataset.swift in Sources */,
 				27B0409EFEFE1F95D7534AB3 /* Employment.swift in Sources */,
@@ -281,7 +287,7 @@
 				4A6C449C138E73E6D0FD2274 /* Biometrics.swift in Sources */,
 				5A0C4A9FE6284A86B58C0C06 /* CareerView.swift in Sources */,
 				D1B6F14C6C4B8F64BA75CC2A /* Components.swift in Sources */,
-				9651BBF4F0338FBB4E96DEE8 /* DataImportView.swift in Sources */,
+				9C0FF1C1A1D24E5B8F0A0006 /* OfficialData.swift in Sources */,
 				221CBB2A2161F6E54A14E9C5 /* DataStore.swift in Sources */,
 				4687542E741216FCD4021742 /* Dataset.swift in Sources */,
 				6C2C527364216328F181F2D2 /* Employment.swift in Sources */,

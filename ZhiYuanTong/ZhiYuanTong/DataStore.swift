@@ -17,6 +17,8 @@ final class DataStore {
     let hotMajors: [HotMajor]
     let cityCareers: [CityCareer]
     let cityCareerMap: [String: CityCareer]
+    /** 省份 id -> 批次规则（志愿数上限、平行/顺序、志愿单位） */
+    let batchRuleMap: [String: ProvinceBatchesDTO]
 
     var currentYear: Int { bundle.currentYear }
     var historyYears: [Int] { bundle.historyYears }
@@ -39,10 +41,21 @@ final class DataStore {
         hotMajors = decoded.hotMajors
         cityCareers = decoded.cityCareers
         cityCareerMap = Dictionary(uniqueKeysWithValues: decoded.cityCareers.map { ($0.name, $0) })
+        batchRuleMap = Dictionary(uniqueKeysWithValues: decoded.batchRules.map { ($0.provId, $0) })
     }
 
     func province(_ id: String) -> Province {
         provinceMap[id] ?? provinces[0]
+    }
+
+    /// 该省的批次设置（按录取顺序）；没有规则时返回 nil，调用方需退回「不按批次」的单表模式
+    func batches(of id: String) -> ProvinceBatchesDTO? {
+        batchRuleMap[id]
+    }
+
+    /// 征集志愿（补录）提示
+    func supplementNote(of id: String) -> String? {
+        batchRuleMap[id]?.supplementNote
     }
 
     func heat(of city: String) -> Double {

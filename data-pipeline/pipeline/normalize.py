@@ -19,7 +19,7 @@ COMBINED_KEYS = ["综合", "综合类"]
 VALID_TRACKS = {"phy", "his"}
 
 INT_COLUMNS = {
-    "year", "score", "rank", "cum_count", "min_score", "min_rank", "plan",
+    "year", "score", "rank", "cum_count", "min_score", "min_rank", "plan", "uni_code",
     "special", "undergrad", "college", "candidates", "ug_plan",
 }
 

@@ -1,5 +1,6 @@
 name = "新疆"
 mode = "3+1+2"
+# 数据集 2025 仍是文理分科（理科/文科），TRACK_MAP 会归一成 phy/his
 
 # 数据集目录名沿用 App 的省份 id（src/data/provinces*.ts）；若数据集用别的拼写，
 # 只改下面两个 url_template 的目录段即可，其余配置无需动。
@@ -13,7 +14,7 @@ parser = "hf_csv"
 [sources.options]
 dataset = "score-range"
 column_map = { score = "score", cumulative_count = "rank", segment_count = "cum_count", category = "track" }
-track_filter = ["物理类", "历史类"]
+track_filter = ["理科", "文科"]
 
 [[sources]]
 kind = "admission"
@@ -24,5 +25,5 @@ parser = "hf_csv"
 dataset = "school-admission"
 column_map = { university_name = "uni_name", university_code = "uni_code", min_score = "min_score", min_rank = "min_rank", category = "track", batch = "batch", major_group = "group", subject_req = "subject_req", admit_count = "plan", school_province = "uni_prov", school_nature = "nature", is_985 = "is_985", is_211 = "is_211" }
 fallback_columns = { group = "subject_req" }
-track_filter = ["物理类", "历史类"]
+track_filter = ["理科", "文科"]
 

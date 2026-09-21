@@ -188,6 +188,53 @@ export interface HotMajor extends MajorCareer {
   subjects: string
 }
 
+/**
+ * 录取批次归类（与 App 侧 BatchKind 一一对应）。
+ * - earlyUG 本科提前批 / undergrad 本科批 / special 专项与特殊类型
+ * - earlyCollege 专科提前批 / college 专科批 / supplement 征集志愿（补录）
+ */
+export type BatchKindId =
+  | 'earlyUG'
+  | 'undergrad'
+  | 'special'
+  | 'earlyCollege'
+  | 'college'
+  | 'supplement'
+
+/** 志愿单位：group 院校专业组（有专业调剂），major 专业（类）+学校（无调剂） */
+export type VolunteerUnit = 'group' | 'major'
+/** 投档模式：parallel 平行志愿，sequential 顺序/有序/梯度志愿（第一志愿优先） */
+export type VolunteerMode = 'parallel' | 'sequential'
+
+export interface BatchRule {
+  kind: BatchKindId
+  /** 省里的官方批次名，如「本科提前批」「普通类一段」 */
+  name: string
+  /** 录取顺序，数字越小越先录（前一批次录取后，后续批次志愿作废） */
+  order: number
+  /** 志愿数上限 */
+  max: number
+  mode: VolunteerMode
+  unit: VolunteerUnit
+  /** 是否可以服从专业调剂（专业+学校模式没有调剂） */
+  allowAdjust: boolean
+  /** 每个志愿可填的专业数（院校专业组模式，默认 6） */
+  majorsPerVol?: number
+  note?: string
+  /** 是否已按当年官方文件逐条核对（false 时 UI 提示「规则待核对」） */
+  verified?: boolean
+}
+
+export interface ProvinceBatches {
+  provId: string
+  year: number
+  /** 提前批类别（军事/公安/…）：各省多规定各类别之间不得兼报 */
+  earlyGroups?: string[]
+  batches: BatchRule[]
+  /** 征集志愿（补录）提示：投档线数据里没有征集志愿，只能提示考生盯公告 */
+  supplementNote?: string
+}
+
 export interface CityCareer {
   name: string
   industries: string[]

@@ -15,6 +15,10 @@ final class AppState: ObservableObject {
     @Published var rank: Double = 0
     @Published var cur: CurrentLines
     @Published var evals: [Evaluated] = []
+    /// 当前批次（BatchKind.rawValue）：各省批次分开生成志愿表，互不覆盖
+    @Published var currentBatch: String = BatchKind.undergrad.rawValue
+    /// 当前批次的院校评估（只含该批次有投档线的院校）
+    @Published var batchEvals: [Evaluated] = []
     @Published var trend: [ProvinceTrendPoint] = []
     @Published var locked = false
     @Published var isLoading = false
@@ -22,23 +26,51 @@ final class AppState: ObservableObject {
     private(set) var engine: AdmissionEngine
     private let store = DataStore.shared
 
-    var dataset: OfficialDataset {
-        get { engine.dataset }
-        set {
-            engine.dataset = newValue
-            LocalStore.shared.saveDataset(newValue)
-            objectWillChange.send()
-            recompute()
-        }
+    /// 当前生效的官方数据：随 App 内置，按考生高考省份自动装载
+    var dataset: OfficialDataset { engine.dataset }
+
+    /// 内置数据的覆盖情况（一分一段表 / 投档线），供「我的」页展示
+    var coverage: OfficialCoverage {
+        guard let p = profile else { return OfficialCoverage() }
+        return OfficialData.shared.coverage(provId: p.provId, year: store.currentYear, track: p.track)
     }
 
     var prov: Province { store.province(profile?.provId ?? "") }
 
+    var currentBatchKind: BatchKind { BatchKind(rawValue: currentBatch) ?? .undergrad }
+
+    /// 该省按分数可填的批次（本科线下只剩专科批次）；没有规则数据的省返回空，退回「不按批次」的单表模式
+    var availableBatches: [BatchRuleDTO] {
+        guard let p = profile, let rules = store.batches(of: p.provId) else { return [] }
+        return fillableBatches(
+            rules.sorted, score: p.score,
+            lines: prov.lines(year: store.currentYear, track: p.track)
+        )
+    }
+
+    /// 该批次的志愿数上限等规则（无规则时返回 nil，按默认 42 个的旧口径生成）
+    func rule(of batch: BatchKind) -> BatchRuleDTO? {
+        availableBatches.first { $0.batchKind == batch }
+    }
+
+    /// 按批次评估：只含该批次有投档线的院校
+    func evals(for batch: BatchKind) -> [Evaluated] {
+        guard let p = profile else { return [] }
+        let records = engine.buildRecords(provId: p.provId, track: p.track, batch: batch)
+        return records.map { engine.evaluateUni($0, studentScore: p.score, studentRank: rank, curSpecial: cur.special) }
+    }
+
+    /// 按考生分数默认的批次：本科线上本科批，线下专科批
+    private var defaultBatch: BatchKind {
+        (profile?.score ?? 0) >= cur.undergrad ? .undergrad : .college
+    }
+
     init() {
-        let ds = LocalStore.shared.loadDataset()
-        engine = AdmissionEngine(dataset: ds)
+        // 数据集不再存本机：内置数据随 App 分发，旧版本存下来的数据集直接清掉
+        LocalStore.shared.clearDataset()
+        engine = AdmissionEngine(dataset: .empty)
         let p = store.provinces[0]
-        let l = p.lines(year: store.currentYear, track: .phy) ?? p.lines(year: 2024, track: .phy)!
+        let l = p.linesUpTo(year: store.currentYear, track: .phy)!
         cur = CurrentLines(special: l.special, undergrad: l.undergrad, college: l.college)
 
         if let sid = LocalStore.shared.loadSession(),
@@ -48,10 +80,16 @@ final class AppState: ObservableObject {
             locked = LocalStore.shared.isBioLockEnabled
         }
         recompute()
-        // 预热就业预测（346 所院校，首次约耗时百毫秒级）
-        Task.detached(priority: .utility) {
-            _ = EmploymentModel.allForecasts(ds)
-        }
+    }
+
+    /// 就业预测首次计算较慢，装载完内置数据后预热一次
+    private var warmed = false
+
+    private func warmEmployment() {
+        guard !warmed else { return }
+        warmed = true
+        let ds = engine.dataset
+        Task.detached(priority: .utility) { _ = EmploymentModel.allForecasts(ds) }
     }
 
     // MARK: - 计算
@@ -59,12 +97,21 @@ final class AppState: ObservableObject {
     func recompute() {
         guard let p = profile else { return }
         let prov = store.province(p.provId)
+        engine.dataset = OfficialData.shared.dataset(provId: p.provId, year: store.currentYear, track: p.track)
+        engine.admissionIndex = buildAdmissionIndex(engine.dataset)
+        engine.batchIndex = buildBatchAdmissionIndex(engine.dataset)
         let override = Recommend.override(of: p)
         cur = engine.currentLines(prov, p.track, override: override)
         rank = p.rank ?? engine.rankOfScore(prov, store.currentYear, p.track, p.score)
         let records = engine.buildRecords(provId: p.provId, track: p.track)
         evals = records.map { engine.evaluateUni($0, studentScore: p.score, studentRank: rank, curSpecial: cur.special) }
         trend = engine.provinceTrend(prov, p.track, override: override)
+        // 换省或改分数后，原来选的批次可能已经不可填（如本科线下选了本科批）→ 回退到默认批次
+        if !availableBatches.contains(where: { $0.batchKind.rawValue == currentBatch }) {
+            currentBatch = defaultBatch.rawValue
+        }
+        reloadBatchEvals()
+        warmEmployment()
     }
 
     // MARK: - 档案
@@ -120,41 +167,77 @@ final class AppState: ObservableObject {
 
     // MARK: - 志愿表
 
-    func addVolunteer(_ name: String) {
-        guard volunteers.first(where: { $0.uniName == name }) == nil,
-              let target = evals.first(where: { $0.rec.seed.name == name })
-        else { return }
-        volunteers.append(
-            VolunteerItem(
-                uniName: name,
-                tier: target.tier == "险" ? "冲" : target.tier,
-                prob: target.prob,
-                note: nil
+    /// 切换当前批次并重算该批次的院校评估（只含该批次有投档线的院校）
+    func selectBatch(_ batch: BatchKind) {
+        currentBatch = batch.rawValue
+        reloadBatchEvals()
+    }
+
+    private func reloadBatchEvals() {
+        guard profile != nil else { batchEvals = []; return }
+        batchEvals = evals(for: currentBatchKind)
+    }
+
+    func addVolunteer(_ name: String, batch: String? = nil) {
+        let b = batch ?? currentBatch
+        guard volunteers.first(where: { $0.uniName == name && $0.batch == b }) == nil else { return }
+        let kind = BatchKind(rawValue: b) ?? .undergrad
+        // 优先用该批次的评估；该校该批次没投档线（多半是不在这个批次招生）时退回主批次口径并提示
+        if let target = evals(for: kind).first(where: { $0.rec.seed.name == name }) {
+            volunteers.append(volunteerItem(name, target, b, nil))
+        } else if let target = evals.first(where: { $0.rec.seed.name == name }) {
+            volunteers.append(
+                volunteerItem(name, target, b, "该校在「\(kind.label)」没有投档线数据，填报前请确认这个批次是否在我省招生")
             )
+        } else { return }
+        saveVolunteers()
+    }
+
+    private func volunteerItem(_ name: String, _ target: Evaluated, _ batch: String, _ note: String?) -> VolunteerItem {
+        VolunteerItem(
+            uniName: name,
+            tier: target.tier == "险" ? "冲" : target.tier,
+            prob: target.prob,
+            note: note,
+            batch: batch
         )
+    }
+
+    /// 删除志愿：同一院校可能同时出现在本科批与专科批，按批次删
+    func removeVolunteer(_ name: String, batch: String? = nil) {
+        let b = batch ?? currentBatch
+        volunteers.removeAll { $0.uniName == name && $0.batch == b }
         saveVolunteers()
     }
 
-    func removeVolunteer(_ name: String) {
-        volunteers.removeAll { $0.uniName == name }
+    /// 批次内调整顺序：传的是该批次内的序号，内部映射回全局下标
+    func moveVolunteer(inBatch batch: String, from offsets: IndexSet, to offset: Int) {
+        let slots = volunteers.indices.filter { volunteers[$0].batch == batch }
+        var rows = slots.map { volunteers[$0] }
+        rows.move(fromOffsets: offsets, toOffset: offset)
+        for (slot, global) in slots.enumerated() { volunteers[global] = rows[slot] }
         saveVolunteers()
     }
 
-    func moveVolunteer(from offsets: IndexSet, to offset: Int) {
-        volunteers.move(fromOffsets: offsets, toOffset: offset)
-        saveVolunteers()
-    }
-
+    /// 清空当前批次的志愿
     func clearVolunteers() {
+        volunteers.removeAll { $0.batch == currentBatch }
+        saveVolunteers()
+    }
+
+    /// 清空全部批次的志愿
+    func clearAllVolunteers() {
         volunteers = []
         saveVolunteers()
     }
 
-    /// 按向导收集的偏好生成志愿表，写回偏好并跳转到志愿表页；
+    /// 按向导收集的偏好生成**所选批次**的志愿表，写回偏好并跳转到志愿表页；
+    /// 只替换同批次的志愿（本科批与专科批分别生成、互不影响），
     /// 挑不出 ≥15% 概率的院校时返回 `items` 为空的结果，**不清空已有志愿表**
     @discardableResult
     func generateVolunteers(prefs: Recommend.GenPrefs) -> Recommend.GenResult {
-        let res = Recommend.genVolunteers(evals, prefs: prefs, ds: engine.dataset)
+        let batch = prefs.batchKind
+        let res = Recommend.genVolunteers(evals(for: batch), prefs: prefs, ds: engine.dataset)
         guard !res.items.isEmpty else { return res }
         update { p in
             p.cities = prefs.cities
@@ -164,8 +247,10 @@ final class AppState: ObservableObject {
             p.preferProvince = prefs.preferProvince
             p.strategy = prefs.strategy
         }
-        volunteers = res.items
+        volunteers = volunteers.filter { $0.batch != batch.rawValue } + res.items
         saveVolunteers()
+        currentBatch = batch.rawValue
+        reloadBatchEvals()
         tab = .list
         return res
     }
@@ -177,28 +262,7 @@ final class AppState: ObservableObject {
 
     // MARK: - 官方数据
 
-    func importRank(_ text: String, ctx: ImportContext) -> ImportReport {
-        var ds = engine.dataset
-        let report = importRankCsv(text, ctx: ctx, into: &ds)
-        if report.ok { dataset = ds }
-        return report
-    }
-
-    func importAdmission(_ text: String, ctx: ImportContext) -> ImportReport {
-        var ds = engine.dataset
-        let report = importAdmissionCsv(text, ctx: ctx, into: &ds)
-        if report.ok { dataset = ds }
-        return report
-    }
-
-    func importEmployment(_ text: String) -> ImportReport {
-        var ds = engine.dataset
-        let report = importEmploymentCsv(text, into: &ds)
-        if report.ok { dataset = ds }
-        return report
-    }
-
-    /// 某校在当前档案下的专业级评估（需先导入「专业录取线」）
+    /// 某校在当前档案下的专业级评估（内置「专业录取线」的省份才有点开的意义）
     func majorEvals(_ uniName: String) -> [MajorEval] {
         guard let p = profile else { return [] }
         let rows = findMajorAdmissions(engine.dataset, uniName, p.provId, p.track, store.currentYear)
@@ -210,24 +274,6 @@ final class AppState: ObservableObject {
         )
     }
 
-    func importMajorAdmission(_ text: String, ctx: ImportContext) -> ImportReport {
-        var ds = engine.dataset
-        let report = importMajorAdmissionCsv(text, ctx: ctx, into: &ds)
-        if report.ok { dataset = ds }
-        return report
-    }
-
-    func clearDataset() {
-        LocalStore.shared.clearDataset()
-        dataset = .empty
-    }
-
-    var stats: DatasetStats { datasetStats(engine.dataset) }
-
-    var hasOfficialData: Bool {
-        !engine.dataset.rankTables.isEmpty || !engine.dataset.admissions.isEmpty
-            || !engine.dataset.employments.isEmpty || !engine.dataset.majorAdmissions.isEmpty
-    }
 }
 
 extension StudentProfile {

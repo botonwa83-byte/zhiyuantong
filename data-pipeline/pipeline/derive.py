@@ -186,3 +186,50 @@ def reconcile_min_rank(
         stats["unreliable_sources"] = sorted(unreliable)
         stats["verdict"] = "该来源 min_rank 口径整体不可用（疑似非最低分位次），已按一分一段表重算/置空"
     return out, stats
+
+
+def aggregate_university_meta(df: pd.DataFrame) -> pd.DataFrame:
+    """院校主数据按规范化名称聚合。
+
+    同一所大学在各省的**招生代码**不同（山东大学在数据里出现 44 个代码），按
+    (uni_code, uni_name) 去重会得到 2 万多条「院校」，App 里会变成一堆重复卡片。
+    这里按规范名聚合到 2700 所左右：代码取出现最多的那个（注意是招生代码，不是教育部国标代码），
+    名称取出现最多的写法，其余字段取众数。
+    """
+    if df is None or df.empty or "uni_name" not in df.columns:
+        return df
+    from pipeline.aliases import clean_name
+
+    work = df.copy()
+    work["_key"] = work["uni_name"].map(lambda v: clean_name(v))
+    work = work[work["_key"].astype(str).str.len() > 0]
+    if work.empty:
+        return df
+
+    def mode_of(series: pd.Series):
+        values = series.dropna()
+        values = values[values.astype(str).str.strip() != ""]
+        if values.empty:
+            return pd.NA
+        counts = values.value_counts()
+        # 平局（每个值只出现一次）时以最新一条为准：后跑的省份数据更全
+        return values.iloc[-1] if counts.iloc[0] == 1 else counts.index[0]
+
+    rows = []
+    for _key, group in work.groupby("_key", sort=False):
+        aliases = sorted({str(v).strip() for v in group["uni_name"].dropna() if str(v).strip()})
+        rows.append(
+            {
+                "uni_code": mode_of(group["uni_code"]) if "uni_code" in group else pd.NA,
+                "uni_name": mode_of(group["uni_name"]),
+                "aliases": "|".join(aliases[:5]) if len(aliases) > 1 else pd.NA,
+                "uni_prov": mode_of(group["uni_prov"]) if "uni_prov" in group else pd.NA,
+                "city": mode_of(group["city"]) if "city" in group else pd.NA,
+                "level": mode_of(group["level"]) if "level" in group else pd.NA,
+                "kind": mode_of(group["kind"]) if "kind" in group else pd.NA,
+                "nature": mode_of(group["nature"]) if "nature" in group else pd.NA,
+                "source": group["source"].iloc[0] if "source" in group else pd.NA,
+                "fetched_at": group["fetched_at"].iloc[0] if "fetched_at" in group else pd.NA,
+            }
+        )
+    return pd.DataFrame(rows)

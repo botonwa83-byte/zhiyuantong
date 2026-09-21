@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 COLUMN_KEYS: dict[str, list[str]] = {
@@ -59,6 +60,21 @@ def archive_dest(spec, year: int, prov_id: str) -> Path | None:
     if not ext:
         return None
     return local_dataset_path(spec.kind, year, prov_id, spec.options.get("dataset", spec.kind), ext)
+
+
+_CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
+
+
+def clean_text(value: object) -> str:
+    """清洗源数据里的坏字符，避免写出的 staging CSV 列数错乱。
+
+    实测数据集里有截断的 UTF-8 字节（如重庆某院校名被砍掉半个汉字），按替换符读入后
+    字段里混入 U+FFFD 与控制字符，会让 university_meta 写出的行从 10 列变 19 列，
+    下一次批跑回读 staging 时直接 ParserError 崩掉。
+    """
+    text = str(value).replace("\ufffd", "")
+    text = _CONTROL.sub("", text)
+    return text.replace("\u3000", " ").strip()
 
 
 def normalize_header(text: str) -> str:
@@ -119,7 +135,7 @@ def apply_column_map(
     if column_map:
         mapping = match_columns(headers, list(column_map.keys()))
         for rec in body:
-            row = {column_map[h]: str(rec[i]).strip() for h, i in mapping.items() if i < len(rec)}
+            row = {column_map[h]: clean_text(rec[i]) for h, i in mapping.items() if i < len(rec)}
             row = {k: v for k, v in row.items() if v and v.lower() != "nan"}
             if row:
                 rows.append(row)

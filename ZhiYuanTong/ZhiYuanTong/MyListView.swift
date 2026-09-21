@@ -4,13 +4,20 @@ import SwiftUI
 struct MyListView: View {
     @EnvironmentObject var state: AppState
     @State private var showGen = false
-    /// 展开了「可报专业清单」的院校名（导入专业录取线后才有点开的意义）
+    /// 展开了「可报专业清单」的院校名（内置了专业录取线的省份才有点开的意义）
     @State private var expanded: Set<String> = []
 
-    private var items: [VolunteerItem] { state.volunteers }
+    /// 当前批次的志愿：各省批次分开管理，本科批与专科批互不干扰
+    private var items: [VolunteerItem] { state.volunteers.filter { $0.batch == state.currentBatch } }
+    /// 该省可填批次（按分数筛过）：为空表示这个省还没有批次规则，退回原来的单表模式
+    private var batches: [BatchRuleDTO] { state.availableBatches }
+    private var rule: BatchRuleDTO? { batches.first { $0.batchKind.rawValue == state.currentBatch } }
     private var evalByName: [String: Evaluated] {
-        Dictionary(uniqueKeysWithValues: state.evals.map { ($0.rec.seed.name, $0) })
+        var map = Dictionary(uniqueKeysWithValues: state.evals.map { ($0.rec.seed.name, $0) })
+        for e in state.batchEvals { map[e.rec.seed.name] = e }
+        return map
     }
+    private var supplementNote: String? { DataStore.shared.supplementNote(of: state.profile?.provId ?? "") }
 
     private var forecasts: [EmploymentForecast] {
         items.compactMap { EmploymentModel.forecast(name: $0.uniName, state.dataset) }
@@ -38,6 +45,9 @@ struct MyListView: View {
         return out
     }
 
+    /// 志愿数超过该批次上限（多是手动添加时超出）
+    private var overQuota: Bool { rule.map { items.count > $0.max } ?? false }
+
     private var riskyTop: Int {
         items.prefix(3).filter { (evalByName[$0.uniName]?.prob ?? 0) < 0.15 }.count
     }
@@ -52,16 +62,27 @@ struct MyListView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
                     header
+                    if !batches.isEmpty { batchPicker }
+                    if let rule { batchRuleCard(rule) }
+                    if state.currentBatchKind == .earlyUG { earlyGroupCard }
                     statRow
 
-                    if inversions.isEmpty == false || state.profile?.obeyAdjust == false || bao == 0 || riskyTop > 0 {
+                    if inversions.isEmpty == false || state.profile?.obeyAdjust == false || bao == 0 || riskyTop > 0 || overQuota {
                         checkCard
+                    }
+
+                    if let note = supplementNote, !items.isEmpty {
+                        supplementCard(note)
                     }
 
                     if let emp { employmentCard(emp) }
 
                     if items.isEmpty {
-                        EmptyHint(text: "还没有志愿，点击右上角「一键智能填充」快速生成冲稳保方案").card()
+                        EmptyHint(
+                            text: batches.isEmpty
+                                ? "还没有志愿，点击右上角「一键智能填充」快速生成冲稳保方案"
+                                : "「\(rule?.name ?? "本批次")」还没有志愿，点击右上角「一键智能填充」按本批次规则生成"
+                        ).card()
                     } else {
                         listCard
                     }
@@ -81,7 +102,13 @@ struct MyListView: View {
                     Menu {
                         Button("一键智能填充") { showGen = true }
                         if !items.isEmpty {
-                            Button("清空", role: .destructive) { state.clearVolunteers() }
+                            Button("清空本批次", role: .destructive) { state.clearVolunteers() }
+                        }
+                        let other = state.volunteers.filter { $0.batch != state.currentBatch }
+                        if !other.isEmpty {
+                            Button("清空全部批次（\(state.volunteers.count) 个）", role: .destructive) {
+                                state.clearAllVolunteers()
+                            }
                         }
                     } label: {
                         Image(systemName: "ellipsis.circle")
@@ -98,16 +125,134 @@ struct MyListView: View {
     private var header: some View {
         VStack(alignment: .leading, spacing: 3) {
             Text("我的志愿表").font(.title2.weight(.semibold))
-            Text("平行志愿按「冲 → 稳 → 保」从上到下排列，共 \(items.count) 个")
-                .font(.caption).foregroundStyle(Color.ink400)
+            if let rule {
+                Text("\(rule.name)：\(rule.isSequential ? "顺序志愿按「稳 → 保」排列" : "平行志愿按「冲 → 稳 → 保」从上到下排列")，\(items.count)/\(rule.max) 个")
+                    .font(.caption).foregroundStyle(Color.ink400)
+            } else {
+                Text("平行志愿按「冲 → 稳 → 保」从上到下排列，共 \(items.count) 个")
+                    .font(.caption).foregroundStyle(Color.ink400)
+            }
         }
     }
 
+    // MARK: - 批次
+
+    /// 批次切换：各省可填的批次（本科线下只剩专科批次），点一个切一个
+    private var batchPicker: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(batches) { r in
+                    Button {
+                        state.selectBatch(r.batchKind)
+                    } label: {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(r.name)
+                                .font(.system(size: 12, weight: .medium))
+                            Text("\(state.volunteers.filter { $0.batch == r.batchKind.rawValue }.count)/\(r.max) 个")
+                                .font(.system(size: 10))
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(
+                            RoundedRectangle(cornerRadius: 10)
+                                .fill(state.currentBatch == r.batchKind.rawValue ? Color.brand : Color.surface)
+                        )
+                        .foregroundStyle(state.currentBatch == r.batchKind.rawValue ? Color.white : Color.ink700)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 10)
+                                .stroke(state.currentBatch == r.batchKind.rawValue ? Color.brand : Color.ink100, lineWidth: 1)
+                        )
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+    }
+
+    /// 批次规则卡：志愿数上限、平行或顺序、有没有专业调剂、规则是否已核对
+    private func batchRuleCard(_ r: BatchRuleDTO) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Text(r.name).font(.subheadline.weight(.semibold)).foregroundStyle(Color.ink900)
+                Text(r.isSequential ? "顺序志愿" : "平行志愿")
+                    .font(.system(size: 10)).padding(.horizontal, 6).padding(.vertical, 2)
+                    .background(Capsule().fill(Color.brandSoft)).foregroundStyle(Color.brand)
+                Text(r.isGroupUnit ? "院校专业组" : "专业+学校")
+                    .font(.system(size: 10)).padding(.horizontal, 6).padding(.vertical, 2)
+                    .background(Capsule().fill(Color.ink50)).foregroundStyle(Color.ink500)
+                Spacer()
+                Text("\(items.count)/\(r.max)").font(.caption.monospacedDigit()).foregroundStyle(Color.ink400)
+            }
+            Text(ruleText(r))
+                .font(.caption2).foregroundStyle(Color.ink500)
+                .fixedSize(horizontal: false, vertical: true)
+            if let note = r.note {
+                Text(note).font(.caption2).foregroundStyle(Color.ink400).fixedSize(horizontal: false, vertical: true)
+            }
+            if !r.verified {
+                Text("该批次的志愿数上限尚未与当年官方文件逐条核对，正式填报请以省考试院公告为准。")
+                    .font(.caption2).foregroundStyle(Color.warn)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .card()
+    }
+
+    private func ruleText(_ r: BatchRuleDTO) -> String {
+        var parts = ["本批次最多可填 \(r.max) 个志愿"]
+        if r.isGroupUnit {
+            parts.append("每个志愿是「一所院校的一个专业组」，组内最多 \(r.majorsPerVolunteer) 个专业，可勾选专业调剂")
+        } else {
+            parts.append("每个志愿就是一个具体专业，没有专业调剂，填的每个专业都必须能接受")
+        }
+        if r.isSequential {
+            parts.append("顺序（梯度）志愿第一志愿优先，冲高失败会大幅掉档")
+        }
+        return parts.joined(separator: "；") + "。"
+    }
+
+    /// 提前批：各类别不得兼报
+    private var earlyGroupCard: some View {
+        let groups = DataStore.shared.batches(of: state.profile?.provId ?? "")?.earlyGroups ?? []
+        return VStack(alignment: .leading, spacing: 6) {
+            SectionTitle(title: "提前批类别", sub: "只能选报其中一类")
+            if groups.isEmpty {
+                Text("· 各省提前批一般分军事、公安、司法、师范、医学等类别，各类别不得兼报，且多数需要体检、政审或面试。")
+                    .font(.caption).foregroundStyle(Color.ink700)
+            } else {
+                Text("· " + groups.joined(separator: "、") + "：只能选报其中一类（各省规定略有差异）。")
+                    .font(.caption).foregroundStyle(Color.ink700)
+            }
+            Text("· 提前批被录取后，后面本科批的志愿自动作废；没被录取则不影响后续批次。")
+                .font(.caption).foregroundStyle(Color.ink700)
+        }
+        .card()
+        .background(RoundedRectangle(cornerRadius: 16).fill(Color.warn.opacity(0.08)))
+    }
+
+    /// 征集志愿（补录）提醒：投档线数据里没有征集志愿，只能提示考生盯公告
+    private func supplementCard(_ note: String) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            SectionTitle(title: "征集志愿（补录）", sub: "本 App 无征集计划数据")
+            Text(note).font(.caption).foregroundStyle(Color.ink700)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .card()
+        .background(RoundedRectangle(cornerRadius: 16).fill(Color.brandSoft.opacity(0.5)))
+    }
+
     private var statRow: some View {
-        VStack(spacing: 10) {
+        let quota = rule.map {
+            tierQuota(max: $0.max, strategy: state.profile?.strategy ?? .balanced, sequential: $0.isSequential)
+        }
+        return VStack(spacing: 10) {
             HStack(spacing: 10) {
-                StatTile(label: "志愿总数", value: "\(items.count)", sub: "建议 30-45 个")
-                StatTile(label: "冲 / 稳 / 保", value: "\(chong) / \(wen) / \(bao)", sub: "建议 12 / 18 / 12")
+                StatTile(label: "志愿总数", value: "\(items.count)", sub: rule.map { "上限 \($0.max) 个" } ?? "建议 30-45 个")
+                StatTile(
+                    label: "冲 / 稳 / 保",
+                    value: "\(chong) / \(wen) / \(bao)",
+                    sub: quota.map { "建议 \($0.reach) / \($0.match) / \($0.safe)" } ?? "建议 12 / 18 / 12"
+                )
             }
             HStack(spacing: 10) {
                 StatTile(
@@ -118,9 +263,9 @@ struct MyListView: View {
                 )
                 StatTile(
                     label: "服从调剂",
-                    value: state.profile?.obeyAdjust == true ? "已勾选" : "未勾选",
-                    sub: state.profile?.obeyAdjust == true ? "退档风险低" : "退档风险上升",
-                    tone: state.profile?.obeyAdjust == true ? .good : .warn
+                    value: rule?.allowAdjust == false ? "无此选项" : (state.profile?.obeyAdjust == true ? "已勾选" : "未勾选"),
+                    sub: rule?.allowAdjust == false ? "专业+学校模式不退档" : (state.profile?.obeyAdjust == true ? "退档风险低" : "退档风险上升"),
+                    tone: rule?.allowAdjust == false ? .brand : (state.profile?.obeyAdjust == true ? .good : .warn)
                 )
             }
         }
@@ -136,8 +281,14 @@ struct MyListView: View {
                 if bao == 0 {
                     Text("· 缺少保底志愿，建议补充 6-12 个等效分低于自身 15 分以上的院校。")
                 }
-                if state.profile?.obeyAdjust == false {
+                if state.profile?.obeyAdjust == false && rule?.allowAdjust != false {
                     Text("· 未勾选服从专业调剂，一旦分数不够所填专业会被退档，建议勾选。")
+                }
+                if overQuota, let r = rule {
+                    Text("· 本批次志愿数 \(items.count) 个已超过 \(r.max) 个上限，正式填报系统会拒绝录入超出的部分，建议删除或移到其他批次。")
+                }
+                if rule?.isSequential == true && chong > 0 {
+                    Text("· 这是顺序（梯度）志愿，第一志愿优先，冲 \(chong) 个高风险志愿会浪费第一志愿，建议把把握最大的院校放在第一位。")
                 }
                 if riskyTop > 0 {
                     Text("· 前 3 个志愿录取概率过低，冲刺可以，但不要把全部希望放在极小概率院校上。")
@@ -220,7 +371,7 @@ struct MyListView: View {
                             Image(systemName: "chevron.down").font(.caption)
                         }
                         .disabled(i == items.count - 1)
-                        Button { state.removeVolunteer(v.uniName) } label: {
+                        Button { state.removeVolunteer(v.uniName, batch: v.batch) } label: {
                             Image(systemName: "xmark").font(.caption).foregroundStyle(Color.danger)
                         }
                     }
@@ -234,7 +385,7 @@ struct MyListView: View {
         .card()
     }
 
-    /// 导入了专业录取线时，标注该志愿的可报专业数（按考生选科过滤），点开可看专业级概率
+    /// 内置了专业录取线时，标注该志愿的可报专业数（按考生选科过滤），点开可看专业级概率
     private func majorDisclosure(_ uniName: String, evals: [MajorEval]) -> some View {
         let ok = evals.filter(\.meets)
         let open = expanded.contains(uniName)
@@ -312,6 +463,6 @@ struct MyListView: View {
     private func move(_ i: Int, _ dir: Int) {
         let j = i + dir
         guard j >= 0, j < items.count else { return }
-        state.moveVolunteer(from: IndexSet(integer: i), to: j > i ? j + 1 : j)
+        state.moveVolunteer(inBatch: state.currentBatch, from: IndexSet(integer: i), to: j > i ? j + 1 : j)
     }
 }

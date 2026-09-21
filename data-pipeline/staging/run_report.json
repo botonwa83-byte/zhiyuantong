@@ -14,54 +14,51 @@
           "year": 2025,
           "parser": "hf_csv",
           "status": "ok",
-          "rows": 225
+          "rows": 1198
         },
         {
           "kind": "rank_table",
           "year": 2025,
           "parser": "prov_pdf",
-          "status": "missing",
-          "url": "https://www.haeea.cn/attach/file/20250625/20250625063714_3099_2be84248.pdf",
-          "error": "缺少本地副本，请手动下载 https://www.haeea.cn/attach/file/20250625/20250625063714_3099_2be84248.pdf 到 /Users/fengwang/Documents/trae_projects/gaokao/data-pipeline/raw/henan/2025/rank_table_his.pdf"
+          "status": "failed",
+          "error": "rank_table 解析出 0 行（解析器=prov_pdf, 来源=/Users/fengwang/Documents/trae_projects/gaokao/data-pipeline/raw/henan/2025/rank_table_his.pdf）——通常是表头变了，请核对配置 columns/column_map"
         },
         {
           "kind": "admission",
           "year": 2025,
           "parser": "hf_csv",
           "status": "ok",
-          "rows": 1687
+          "rows": 1920
         },
         {
           "kind": "major_admission",
           "year": 2025,
           "parser": "manual",
-          "status": "missing",
-          "url": "https://www.haeea.cn/",
-          "error": "缺少本地副本，请手动下载 https://www.haeea.cn/ 到 /Users/fengwang/Documents/trae_projects/gaokao/data-pipeline/raw/henan/2025/major_admission_major.csv"
+          "status": "disabled",
+          "note": "源取回的是反爬 HTML 页面（raw/henan/2025/major_admission_major.csv），需人工按 templates/major_admission_template.csv 录入后启用"
         }
       ],
-      "unmatched_universities": 1664,
+      "unmatched_universities": 1896,
       "blocking_issues": 0,
       "issues": [],
-      "rank_table_rows": 225,
+      "rank_table_rows": 26195,
       "rank_reconcile": {
         "admission": {
-          "compared": 706,
-          "refilled": 511,
-          "note": "min_rank 与一分一段表不符，已按表重算；无法重算的已置空",
-          "dropped": 968,
-          "median_ratio": 0.677,
+          "compared": 1904,
+          "refilled": 1319,
+          "note": "min_rank 与一分一段表不符，已按表重算",
+          "median_ratio": 0.756,
           "unreliable_sources": [
             "https://hf-mirror.com/datasets/choucsan/Gaokao-Compass-11M/resolve/main/data/2025/henan/school-admission.csv"
           ],
           "verdict": "该来源 min_rank 口径整体不可用（疑似非最低分位次），已按一分一段表重算/置空"
         }
       },
-      "admission_rows": 1687,
-      "university_meta_rows": 609
+      "admission_rows": 67189,
+      "university_meta_rows": 2700
     }
   ],
   "blocking_issues": 0,
-  "warning_issues": 1,
+  "warning_issues": 6,
   "issues": []
 }

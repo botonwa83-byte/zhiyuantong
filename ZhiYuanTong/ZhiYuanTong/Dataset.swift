@@ -61,7 +61,7 @@ func parseCsv(_ text: String) -> [[String]] {
 }
 
 enum ColumnKey: String, CaseIterable {
-    case score, rank, uni, major, subjectReq, prov, track, year, plan, employ, further, salary, industry
+    case score, rank, uni, major, subjectReq, prov, track, year, batch, plan, employ, further, salary, industry
 
     var keys: [String] {
         switch self {
@@ -73,6 +73,7 @@ enum ColumnKey: String, CaseIterable {
         case .prov: return ["省份", "省", "招生省份", "省市", "province", "prov"]
         case .track: return ["科类", "类别", "科目", "文理", "选科", "track", "category", "subject"]
         case .year: return ["年份", "年", "年度", "year"]
+        case .batch: return ["批次", "录取批次", "填报批次", "batch"]
         case .plan: return ["计划", "计划数", "招生计划", "招生人数", "计划人数", "plan"]
         case .employ: return ["就业率", "落实率", "毕业去向落实率", "就业", "就业比例", "employment", "employrate"]
         case .further: return ["深造率", "升学率", "读研率", "考研率", "继续深造", "further", "furtherrate"]
@@ -167,8 +168,75 @@ struct OfficialAdmission: Codable, Identifiable {
     var score: Double
     var rank: Double?
     var plan: Double?
+    /// 录取批次（原始名称，如「本科批」「专科提前批」）；空表示来源未标注批次
+    var batch: String?
 
-    var id: String { "\(provId)-\(track.rawValue)-\(year)-\(uniName)" }
+    var id: String { "\(provId)-\(track.rawValue)-\(year)-\(uniName)-\(batch ?? "")" }
+
+    var batchKind: BatchKind { BatchKind.of(batch) }
+}
+
+// MARK: - 录取批次
+
+/**
+ * 录取批次归类：29 个省的批次名有 58 种写法（本科批 / 本科批B段 / 普通类一段 / 高职专科 / 提前批A类 …），
+ * 统一归到 6 类，用于「按批次生成志愿表」与「院校线取哪个批次」。
+ */
+enum BatchKind: String, Codable, CaseIterable {
+    case undergrad    // 本科批（含 A/B/C 段、普通类一段、本科一/二批）
+    case college      // 专科批（含高职专科、普通类二段、专科批次）
+    case earlyUG      // 本科提前批（含 A/B/C/D 段、提前录取本科）
+    case earlyCollege // 专科提前批
+    case special      // 专项与特殊类型（国家/地方/高校专项、预科、综合评价、特殊类型批）
+    case other        // 未归类（民航飞行技术等）
+
+    var label: String {
+        switch self {
+        case .undergrad: return "本科批"
+        case .college: return "专科批"
+        case .earlyUG: return "本科提前批"
+        case .earlyCollege: return "专科提前批"
+        case .special: return "专项/特殊类型"
+        case .other: return "其他批次"
+        }
+    }
+
+    /// 取院校线时的优先级：数字越小越优先。本科批最优先，避免把专科线当成院校线
+    var priority: Int {
+        switch self {
+        case .undergrad: return 0
+        case .college: return 1
+        case .earlyUG: return 2
+        case .special: return 3
+        case .earlyCollege: return 4
+        case .other: return 5
+        }
+    }
+
+    /// 该批次是本科层次还是专科层次（用于判断考生分数段能填哪些批次）
+    var isUndergradLevel: Bool {
+        switch self {
+        case .undergrad, .earlyUG, .special: return true
+        case .college, .earlyCollege, .other: return false
+        }
+    }
+
+    static func of(_ raw: String?) -> BatchKind {
+        guard let raw = raw?.trimmingCharacters(in: .whitespaces), !raw.isEmpty else { return .other }
+        // 顺序不能变：先判专科（含「高职」「专科」「二段」），再判专项，再判提前，最后才是普通本科
+        if raw.contains("专科") || raw.contains("高职") || raw.contains("二段") {
+            return raw.contains("提前") ? .earlyCollege : .college
+        }
+        if raw.contains("专项") || raw.contains("预科") || raw.contains("综合评价")
+            || raw.contains("特殊类型") || raw.contains("南疆") || raw.contains("援疆") {
+            return .special
+        }
+        if raw.contains("提前") || raw.contains("零志愿") { return .earlyUG }
+        if raw.contains("本科") || raw.contains("一段") || raw.contains("一批") || raw.contains("二批") {
+            return .undergrad
+        }
+        return .other
+    }
 }
 
 struct OfficialEmployment: Codable, Identifiable {
@@ -261,6 +329,68 @@ struct OfficialDataset: Codable {
 
 func findRankTable(_ ds: OfficialDataset, _ provId: String, _ year: Int, _ track: Track) -> RankTable? {
     ds.rankTables.first { $0.provId == provId && $0.year == year && $0.track == track }
+}
+
+/// 投档线索引键：院校库扩到数千所后，逐年逐校线性查找会明显拖慢测算
+func admissionKey(_ provId: String, _ track: Track, _ year: Int, _ uniName: String) -> String {
+    "\(provId)|\(track.rawValue)|\(year)|\(normalizeUniName(uniName))"
+}
+
+/// 同一院校可能有多条（本科批 / 专科批 / 提前批 …）：院校线只取主批次（本科批优先，专科批兜底）
+func buildAdmissionIndex(_ ds: OfficialDataset) -> [String: OfficialAdmission] {
+    var idx: [String: OfficialAdmission] = [:]
+    for a in ds.admissions {
+        let key = admissionKey(a.provId, a.track, a.year, a.uniName)
+        if let cur = idx[key], cur.batchKind.priority <= a.batchKind.priority { continue }
+        idx[key] = a
+    }
+    return idx
+}
+
+/// 某院校在某省某年可填的全部批次（按批次归类分组）
+func admissionsByBatch(_ ds: OfficialDataset, _ uniName: String, _ provId: String, _ track: Track, _ year: Int) -> [BatchKind: [OfficialAdmission]] {
+    let target = normalizeUniName(uniName)
+    var out: [BatchKind: [OfficialAdmission]] = [:]
+    for a in ds.admissions
+    where a.provId == provId && a.track == track && a.year == year && normalizeUniName(a.uniName) == target {
+        out[a.batchKind, default: []].append(a)
+    }
+    return out
+}
+
+/// 带索引的查找：精确命中走索引，未命中再退回原实现的模糊匹配
+func findAdmission(
+    _ ds: OfficialDataset, index: [String: OfficialAdmission],
+    _ uniName: String, _ provId: String, _ track: Track, _ year: Int
+) -> OfficialAdmission? {
+    if let hit = index[admissionKey(provId, track, year, uniName)] { return hit }
+    return findAdmission(ds, uniName, provId, track, year)
+}
+
+/// 分批次索引键：同一院校同一年可能有本科批、专科批、提前批多条投档线
+func batchAdmissionKey(
+    _ provId: String, _ track: Track, _ year: Int, _ batch: BatchKind, _ uniName: String
+) -> String {
+    "\(provId)|\(track.rawValue)|\(year)|\(batch.rawValue)|\(normalizeUniName(uniName))"
+}
+
+/// 按批次建索引：同一批次同一院校有多条（不同专业组 / 不同招生代码）时取最低分，代表该校该批次的门槛
+func buildBatchAdmissionIndex(_ ds: OfficialDataset) -> [String: OfficialAdmission] {
+    var idx: [String: OfficialAdmission] = [:]
+    for a in ds.admissions {
+        let key = batchAdmissionKey(a.provId, a.track, a.year, a.batchKind, a.uniName)
+        if let cur = idx[key], cur.score <= a.score { continue }
+        idx[key] = a
+    }
+    return idx
+}
+
+/// 指定批次的投档线（没有就是该校该年没在我省这个批次招生，志愿表不能填）
+func findBatchAdmission(
+    _ ds: OfficialDataset, index: [String: OfficialAdmission],
+    _ uniName: String, _ provId: String, _ track: Track, _ year: Int, _ batch: BatchKind
+) -> OfficialAdmission? {
+    index[batchAdmissionKey(provId, track, year, batch, uniName)]
 }
 
 func findAdmission(_ ds: OfficialDataset, _ uniName: String, _ provId: String, _ track: Track, _ year: Int) -> OfficialAdmission? {
@@ -409,6 +539,7 @@ func parseAdmissionCsv(_ text: String, ctx: ImportContext) -> ParseResult<Offici
     let iProv = header ? findColumn(hs, .prov) : -1
     let iYear = header ? findColumn(hs, .year) : -1
     let iTrack = header ? findColumn(hs, .track) : -1
+    let iBatch = header ? findColumn(hs, .batch) : -1
     guard iUni >= 0, iScore >= 0 else {
         return ParseResult(data: [], rows: 0, warnings: ["未找到「院校名称」或「分数」列，请检查表头"])
     }
@@ -424,10 +555,15 @@ func parseAdmissionCsv(_ text: String, ctx: ImportContext) -> ParseResult<Offici
         let track = normalizeTrack(iTrack >= 0 ? r[exist: iTrack] : "", fallback: ctx.track)
         let rank = iRank >= 0 ? toNumber(r[exist: iRank]) : nil
         let plan = iPlan >= 0 ? toNumber(r[exist: iPlan]) : nil
-        let key = "\(provId)|\(track.rawValue)|\(year)|\(normalizeUniName(name))"
+        let rawBatch = iBatch >= 0 ? r[exist: iBatch].trimmingCharacters(in: .whitespaces) : ""
+        let batch = rawBatch.isEmpty ? nil : rawBatch
+        let key = "\(provId)|\(track.rawValue)|\(year)|\(normalizeUniName(name))|\(rawBatch)"
         if seen.contains(key) { continue }
         seen.insert(key)
-        data.append(OfficialAdmission(uniName: name, provId: provId, track: track, year: year, score: score, rank: rank, plan: plan))
+        data.append(OfficialAdmission(
+            uniName: name, provId: provId, track: track, year: year,
+            score: score, rank: rank, plan: plan, batch: batch
+        ))
         n += 1
     }
     if data.isEmpty { warnings.append("未解析到有效数据") }
@@ -701,4 +837,42 @@ extension Array where Element == String {
         guard index >= 0, index < count else { return "" }
         return self[index]
     }
+}
+
+// MARK: - 批次与志愿表规划
+
+/**
+ * 考生分数能填哪些批次：本科线上可填本科（含提前批、专项）与专科，本科线下只能填专科批次。
+ * 没有批次线数据（如西藏缺一分一段）时全部列出，让考生自己判断。
+ */
+func fillableBatches(_ rules: [BatchRuleDTO], score: Double, lines: YearLines?) -> [BatchRuleDTO] {
+    let sorted = rules.sorted { $0.order < $1.order }
+    guard let lines else { return sorted }
+    let canUG = score >= lines.undergrad
+    let canCollege = score >= lines.college
+    return sorted.filter { r in
+        switch r.batchKind {
+        case .undergrad, .earlyUG, .special: return canUG
+        case .college, .earlyCollege: return canCollege
+        case .other: return true
+        }
+    }
+}
+
+/// 冲 / 稳 / 保 的志愿数分配（和为 max）
+///
+/// 顺序志愿（梯度志愿）第一志愿没录上会大幅掉档，所以不冲：全部放在「稳」和「保」，第一志愿取稳。
+func tierQuota(max: Int, strategy: GenStrategy, sequential: Bool = false) -> (reach: Int, match: Int, safe: Int) {
+    guard max > 0 else { return (0, 0, 0) }
+    let ratios: (Double, Double, Double) = {
+        if sequential { return (0, 0.6, 0.4) }
+        switch strategy {
+        case .aggressive: return (0.4, 0.4, 0.2)
+        case .balanced: return (0.3, 0.4, 0.3)
+        case .conservative: return (0.15, 0.35, 0.5)
+        }
+    }()
+    let reach = Int((Double(max) * ratios.0).rounded())
+    let safe = Int((Double(max) * ratios.2).rounded())
+    return (reach, max - reach - safe, safe)
 }

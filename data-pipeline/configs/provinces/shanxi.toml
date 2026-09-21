@@ -1,4 +1,6 @@
 name = "山西"
+# 2025 源数据不可用：category 列全空（物理类/历史类混在一起无法拆分），
+# 且分数是折算值（如 442.152094087）。启用的前提是换源或人工补科类。
 mode = "3+1+2"
 
 # 数据集目录名沿用 App 的省份 id（src/data/provinces*.ts）；若数据集用别的拼写，
@@ -6,6 +8,8 @@ mode = "3+1+2"
 # 用法：`python -m pipeline.run --all --year 2025 --list` 导出需人工下载的清单。
 
 [[sources]]
+disabled = true
+note = "山西 2025 源数据科类缺失、分数为折算值，暂不入库"
 kind = "rank_table"
 url_template = "https://hf-mirror.com/datasets/choucsan/Gaokao-Compass-11M/resolve/main/data/{year}/shanxi/score-range.csv"
 parser = "hf_csv"
@@ -16,6 +20,8 @@ column_map = { score = "score", cumulative_count = "rank", segment_count = "cum_
 track_filter = ["物理类", "历史类"]
 
 [[sources]]
+disabled = true
+note = "山西 2025 源数据科类缺失、分数为折算值，暂不入库"
 kind = "admission"
 url_template = "https://hf-mirror.com/datasets/choucsan/Gaokao-Compass-11M/resolve/main/data/{year}/shanxi/school-admission.csv"
 parser = "hf_csv"

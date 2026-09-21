@@ -88,6 +88,14 @@ struct Province: Identifiable {
     }
 
     func lines(year: Int, track: Track) -> YearLines? { table[year]?[track] }
+
+    /// 该年份尚未公布批次线时（如 2026 届用到 2025 数据），回退到不晚于它的最近一年
+    func linesUpTo(year: Int, track: Track) -> YearLines? {
+        if let exact = table[year]?[track] { return exact }
+        if let nearest = table.keys.filter({ $0 <= year }).sorted(by: >)
+            .compactMap({ table[$0]?[track] }).first { return nearest }
+        return table.keys.sorted().compactMap { table[$0]?[track] }.first
+    }
 }
 
 // MARK: - 院校
@@ -231,8 +239,31 @@ struct VolunteerItem: Codable, Identifiable {
     var tier: String
     var prob: Double
     var note: String?
+    /// 所属批次（BatchKind.rawValue）：各省批次志愿数上限不同，志愿表要按批次分别生成与管理
+    var batch: String
 
     var id: String { uniName }
+    var batchKind: BatchKind { BatchKind(rawValue: batch) ?? .other }
+
+    init(uniName: String, tier: String, prob: Double, note: String?, batch: String = BatchKind.undergrad.rawValue) {
+        self.uniName = uniName
+        self.tier = tier
+        self.prob = prob
+        self.note = note
+        self.batch = batch
+    }
+
+    // 旧存档没有 batch 键：按本科批归组，不能因为新增字段丢掉已填好的志愿表
+    private enum CodingKeys: String, CodingKey { case uniName, tier, prob, note, batch }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        uniName = try c.decode(String.self, forKey: .uniName)
+        tier = try c.decode(String.self, forKey: .tier)
+        prob = try c.decode(Double.self, forKey: .prob)
+        note = try c.decodeIfPresent(String.self, forKey: .note)
+        batch = (try? c.decode(String.self, forKey: .batch)) ?? BatchKind.undergrad.rawValue
+    }
 }
 
 // MARK: - 就业与专业
@@ -303,6 +334,52 @@ struct CityCareer: Codable, Identifiable {
     var id: String { name }
 }
 
+// MARK: - 批次规则（各省志愿设置）
+
+/** 单个批次的志愿设置：志愿数上限、平行或顺序志愿、志愿单位是否有专业调剂 */
+struct BatchRuleDTO: Codable, Identifiable, Equatable {
+    /** 批次归类，取值同 BatchKind（earlyUG / undergrad / special / earlyCollege / college / supplement） */
+    var kind: String
+    /** 省里的官方批次名，如「本科提前批」「普通类一段」 */
+    var name: String
+    /** 录取顺序：数字越小越先录，前一批次被录取后后续批次志愿作废 */
+    var order: Int
+    /** 志愿数上限 */
+    var max: Int
+    /** parallel 平行志愿 / sequential 顺序（有序、梯度）志愿 */
+    var mode: String
+    /** group 院校专业组（有专业调剂）/ major 专业+学校（无调剂） */
+    var unit: String
+    var allowAdjust: Bool
+    /** 每个志愿可填的专业数（院校专业组模式） */
+    var majorsPerVol: Int?
+    var note: String?
+    /** 是否已按当年官方文件逐条核对（false 时 UI 提示「规则待核对」） */
+    var verified: Bool
+
+    var id: String { name }
+
+    var batchKind: BatchKind { BatchKind(rawValue: kind) ?? .other }
+    var isSequential: Bool { mode == "sequential" }
+    /// 一个志愿对应一所院校的一个专业组（否则是「专业+学校」，一个志愿就是一个专业）
+    var isGroupUnit: Bool { unit == "group" }
+    var majorsPerVolunteer: Int { majorsPerVol ?? (isGroupUnit ? 6 : 1) }
+}
+
+/** 某省的批次设置（含提前批类别与征集志愿提示） */
+struct ProvinceBatchesDTO: Codable {
+    var provId: String
+    var year: Int
+    /** 提前批类别（军事 / 公安 / …），各省多规定各类别之间不得兼报 */
+    var earlyGroups: [String]
+    var batches: [BatchRuleDTO]
+    /** 征集志愿（补录）提示：投档线数据里没有征集志愿，只能提示考生盯公告 */
+    var supplementNote: String?
+
+    /// 按录取顺序
+    var sorted: [BatchRuleDTO] { batches.sorted { $0.order < $1.order } }
+}
+
 // MARK: - 资源包
 
 struct DataBundle: Codable {
@@ -315,4 +392,26 @@ struct DataBundle: Codable {
     var majorCareers: [MajorCareer]
     var hotMajors: [HotMajor]
     var cityCareers: [CityCareer]
+    /** 各省批次规则（志愿数上限、平行/顺序、志愿单位） */
+    var batchRules: [ProvinceBatchesDTO]
+
+    // 旧资源包没有 batchRules 键：缺失按空数组处理，不能整份解码失败导致 App 起不来
+    private enum CodingKeys: String, CodingKey {
+        case currentYear, historyYears, provinces, universities, cityHeat
+        case majorProfiles, majorCareers, hotMajors, cityCareers, batchRules
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        currentYear = try c.decode(Int.self, forKey: .currentYear)
+        historyYears = try c.decode([Int].self, forKey: .historyYears)
+        provinces = try c.decode([ProvinceDTO].self, forKey: .provinces)
+        universities = try c.decode([UniversitySeed].self, forKey: .universities)
+        cityHeat = try c.decode([String: Double].self, forKey: .cityHeat)
+        majorProfiles = try c.decode([MajorProfile].self, forKey: .majorProfiles)
+        majorCareers = try c.decode([MajorCareer].self, forKey: .majorCareers)
+        hotMajors = try c.decode([HotMajor].self, forKey: .hotMajors)
+        cityCareers = try c.decode([CityCareer].self, forKey: .cityCareers)
+        batchRules = (try? c.decode([ProvinceBatchesDTO].self, forKey: .batchRules)) ?? []
+    }
 }

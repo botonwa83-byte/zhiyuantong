@@ -1,5 +1,6 @@
 name = "海南"
 mode = "3+3"
+max_score = 900  # 海南用标准分，满分 900（其余省份默认 750）
 
 # 数据集目录名沿用 App 的省份 id（src/data/provinces*.ts）；若数据集用别的拼写，
 # 只改下面两个 url_template 的目录段即可，其余配置无需动。

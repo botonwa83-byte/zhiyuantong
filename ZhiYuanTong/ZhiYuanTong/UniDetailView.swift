@@ -73,7 +73,7 @@ struct UniDetailView: View {
         .card()
     }
 
-    /// 专业级录取线与概率：需要导入「专业录取线」CSV 后才显示；
+    /// 专业级录取线与概率：该省内置了「专业录取线」才显示；
     /// 概率用专业线差法 + 专业位次法测算，选科不符的专业标红并排除在「可报」之外
     private var majorCard: some View {
         let evals = state.majorEvals(uniName)
@@ -133,7 +133,7 @@ struct UniDetailView: View {
         VStack(alignment: .leading, spacing: 10) {
             SectionTitle(
                 title: "近三年录取数据",
-                sub: e.rec.officialYears > 0 ? "含 \(e.rec.officialYears) 年官方投档线" : "内置模型推算，导入官方数据后自动替换"
+                sub: e.rec.officialYears > 0 ? "含 \(e.rec.officialYears) 年官方投档线" : "内置模型推算，该省内置投档线后自动替换"
             )
             ForEach(e.rec.years) { y in
                 HStack(alignment: .top, spacing: 8) {
@@ -160,7 +160,7 @@ struct UniDetailView: View {
     }
 
     private func addButton(e: Evaluated) -> some View {
-        let picked = state.volunteers.contains { $0.uniName == uniName }
+        let picked = state.volunteers.contains { $0.uniName == uniName && $0.batch == state.currentBatch }
         return Button {
             state.addVolunteer(uniName)
         } label: {

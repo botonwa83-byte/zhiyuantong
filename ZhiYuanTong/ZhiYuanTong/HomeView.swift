@@ -77,7 +77,8 @@ struct HomeView: View {
             }
             .buttonStyle(.plain)
             if !state.volunteers.isEmpty {
-                Text("当前志愿表已有 \(state.volunteers.count) 个志愿，重新生成会覆盖。")
+                let inBatch = state.volunteers.filter { $0.batch == state.currentBatch }.count
+                Text("志愿表已有 \(state.volunteers.count) 个志愿（当前批次 \(inBatch) 个），生成只替换所选批次的志愿。")
                     .font(.caption2).foregroundStyle(Color.ink400)
             }
         }
@@ -112,7 +113,7 @@ struct HomeView: View {
                 if officialUnis > 0 { parts.append("\(officialUnis) 所院校真实投档线") }
                 return "已接入官方数据：" + parts.joined(separator: " · ")
             }
-            return "数据模式：内置示例模型。可在「我的 → 官方数据接入」导入一分一段表与投档线，切换为真实数据"
+            return "\(state.prov.name) 暂无内置录取数据，测算使用内置推算模型"
         }()
         return Text(text).font(.caption2).foregroundStyle(Color.ink400)
     }

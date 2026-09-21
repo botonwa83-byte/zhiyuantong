@@ -319,7 +319,7 @@ enum EmploymentModel {
     private static var cacheKey: String?
     private static var cache: [String: EmploymentForecast] = [:]
 
-    /// 全部院校就业预测（带缓存，导入就业数据后自动重算）
+    /// 全部院校就业预测（带缓存，加载就业数据后自动重算）
     static func allForecasts(_ ds: OfficialDataset? = nil) -> [String: EmploymentForecast] {
         let key = (ds?.employments.isEmpty == false) ? "emp-\(ds!.employments.count)-\(Int(ds!.updatedAt))" : "base"
         if cacheKey == key { return cache }

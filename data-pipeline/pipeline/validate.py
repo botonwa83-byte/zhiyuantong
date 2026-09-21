@@ -13,6 +13,16 @@ from pipeline.staging import read_table
 
 VALID_TRACKS = {"phy", "his"}
 SCORE_MIN, SCORE_MAX = 0, 750
+
+
+def score_max(prov_id: str) -> float:
+    """省份满分：海南用标准分（900），其余默认 750。"""
+    try:
+        from pipeline.config import load_province_config
+
+        return float(getattr(load_province_config(prov_id), "max_score", SCORE_MAX) or SCORE_MAX)
+    except Exception:
+        return float(SCORE_MAX)
 RANK_TOLERANCE = 0.05
 
 
@@ -92,14 +102,23 @@ def _check_common(df: pd.DataFrame, kind: str) -> list[Issue]:
 
     score_col = "min_score" if "min_score" in df.columns else "score"
     if score_col in df.columns:
+        # 满分按省取（海南标准分 900），缓存避免逐行读 toml
+        caps: dict[str, float] = {}
+        prov_series = df["prov_id"].astype(str) if "prov_id" in df.columns else None
         for i, value in df[score_col].items():
             if pd.isna(value):
                 continue
             score = _as_float(value)
             if score is None:
                 issues.append(Issue(kind, int(i), "score_domain", f"{score_col} 非数值: {value}", str(value)))
-            elif not (SCORE_MIN <= score <= SCORE_MAX):
-                issues.append(Issue(kind, int(i), "score_domain", f"{score_col} 超出 0-750: {value}", str(value)))
+            else:
+                prov = str(prov_series.iloc[i]) if prov_series is not None else ""
+                if prov not in caps:
+                    caps[prov] = score_max(prov)
+                if not (SCORE_MIN <= score <= caps[prov]):
+                    issues.append(
+                        Issue(kind, int(i), "score_domain", f"{score_col} 超出 0-{caps[prov]:g}: {value}", str(value))
+                    )
 
     rank_col = "min_rank" if "min_rank" in df.columns else "rank"
     if rank_col in df.columns:

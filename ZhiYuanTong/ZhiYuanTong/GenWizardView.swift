@@ -9,7 +9,7 @@ struct GenWizardView: View {
     @EnvironmentObject var state: AppState
     @Environment(\.dismiss) private var dismiss
 
-    private let steps = ["意向城市", "意向专业", "调剂与策略", "确认生成"]
+    private let steps = ["填报批次", "意向城市", "意向专业", "调剂与策略", "确认生成"]
 
     @State private var step = 0
     @State private var prefs: Recommend.GenPrefs
@@ -19,8 +19,11 @@ struct GenWizardView: View {
         _prefs = State(initialValue: prefs)
     }
 
+    /// 该省按分数可填的批次（本科线下只剩专科批次）
+    private var batches: [BatchRuleDTO] { state.availableBatches }
+
     private var result: Recommend.GenResult {
-        Recommend.genVolunteers(state.evals, prefs: prefs, ds: state.engine.dataset)
+        Recommend.genVolunteers(state.evals(for: prefs.batchKind), prefs: prefs, ds: state.engine.dataset)
     }
 
     private var profile: StudentProfile { state.profile ?? .placeholder }
@@ -40,6 +43,14 @@ struct GenWizardView: View {
             footer
         }
         .background(Color.surface)
+        .onAppear {
+            guard prefs.rule == nil else { return }
+            // 本科线下考生默认批次是专科批；换省后原来选的批次可能已不可填
+            if !state.availableBatches.contains(where: { $0.batchKind.rawValue == prefs.batch }) {
+                prefs.batch = state.currentBatch
+            }
+            prefs.rule = state.rule(of: prefs.batchKind)
+        }
     }
 
     // MARK: - 结构
@@ -92,9 +103,10 @@ struct GenWizardView: View {
     @ViewBuilder
     private var content: some View {
         switch step {
-        case 0: cityStep
-        case 1: majorStep
-        case 2: strategyStep
+        case 0: batchStep
+        case 1: cityStep
+        case 2: majorStep
+        case 3: strategyStep
         default: confirmStep
         }
     }
@@ -123,6 +135,71 @@ struct GenWizardView: View {
 
     private func toggle(in array: [String], _ v: String) -> [String] {
         array.contains(v) ? array.filter { $0 != v } : array + [v]
+    }
+
+    // MARK: - 0. 填报批次
+
+    /// 批次选择：各省志愿数上限差别很大（辽宁本科批 112 个、新疆各批 18 个），冲稳保配额按批次规则走
+    private var batchStep: some View {
+        Group {
+            note("选择要生成哪个批次的志愿表：各省批次志愿数上限不同，冲稳保配额按该批次规则分配；换批次生成不会覆盖其他批次已有的志愿。")
+            if batches.isEmpty {
+                hint("\(state.prov.name) 暂无批次规则数据，按默认的 42 个志愿生成；正式填报请以省考试院公告为准。")
+            } else {
+                VStack(spacing: 8) {
+                    ForEach(batches) { r in batchRow(r) }
+                }
+                let filled = state.volunteers.filter { $0.batch != BatchKind.undergrad.rawValue }.count
+                if filled > 0 {
+                    hint("其他批次已有志愿，本轮只替换所选批次的志愿。")
+                }
+            }
+        }
+    }
+
+    private func batchRow(_ r: BatchRuleDTO) -> some View {
+        let on = prefs.batch == r.batchKind.rawValue
+        return Button {
+            prefs.batch = r.batchKind.rawValue
+            prefs.rule = r
+        } label: {
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: on ? "checkmark.circle.fill" : "circle")
+                    .font(.system(size: 15))
+                    .foregroundStyle(on ? Color.brand : Color.ink400)
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 6) {
+                        Text(r.name).font(.subheadline.weight(.semibold)).foregroundStyle(Color.ink900)
+                        Text("\(r.max) 个").font(.caption2.monospacedDigit()).foregroundStyle(Color.ink400)
+                        Spacer()
+                        Text(r.isSequential ? "顺序志愿" : "平行志愿")
+                            .font(.system(size: 10))
+                            .padding(.horizontal, 6).padding(.vertical, 2)
+                            .background(Capsule().fill(r.isSequential ? Color.warn.opacity(0.14) : Color.brandSoft))
+                            .foregroundStyle(r.isSequential ? Color.warn : Color.brand)
+                    }
+                    Text(r.isGroupUnit
+                         ? "院校专业组 · 每组最多 \(r.majorsPerVolunteer) 个专业 · 可勾选调剂"
+                         : "专业（类）+学校 · 无专业调剂")
+                        .font(.caption2).foregroundStyle(Color.ink500)
+                    if let n = r.note {
+                        Text(n).font(.caption2).foregroundStyle(Color.ink400)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    if !r.verified {
+                        Text("志愿数上限待核对，正式填报以官方文件为准")
+                            .font(.caption2).foregroundStyle(Color.warn)
+                    }
+                }
+            }
+            .padding(10)
+            .background(RoundedRectangle(cornerRadius: 12).fill(on ? Color.brandSoft.opacity(0.7) : Color.ink50))
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke(on ? Color.brand : Color.clear, lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
     }
 
     // MARK: - 1. 意向城市
@@ -228,6 +305,7 @@ struct GenWizardView: View {
     private var confirmStep: some View {
         Group {
             VStack(alignment: .leading, spacing: 5) {
+                summaryRow("填报批次", batchSummary)
                 summaryRow("意向城市", prefs.cities.isEmpty ? "不限" : prefs.cities.joined(separator: "、"))
                 let majors = prefs.disciplines + prefs.hotMajors
                 summaryRow("意向专业", majors.isEmpty ? "不限" : majors.joined(separator: "、"))
@@ -246,8 +324,9 @@ struct GenWizardView: View {
                 StatTile(label: "保", value: "\(result.bao)", tone: .good)
             }
 
-            if !state.volunteers.isEmpty {
-                Text("生成后会覆盖当前志愿表（现有的 \(state.volunteers.count) 个志愿将被替换）。")
+            let sameBatch = state.volunteers.filter { $0.batch == prefs.batch }
+            if !sameBatch.isEmpty {
+                Text("生成后会替换「\(prefs.rule?.name ?? "本批次")」已有的 \(sameBatch.count) 个志愿，其他批次不受影响。")
                     .font(.caption2).foregroundStyle(Color.warn)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -288,6 +367,11 @@ struct GenWizardView: View {
                 Text(message).font(.caption).foregroundStyle(Color.danger).fixedSize(horizontal: false, vertical: true)
             }
         }
+    }
+
+    private var batchSummary: String {
+        guard let r = prefs.rule else { return "默认（该省暂无批次规则）" }
+        return "\(r.name) · \(r.isSequential ? "顺序" : "平行") · \(r.isGroupUnit ? "院校专业组" : "专业+学校") · 上限 \(r.max) 个"
     }
 
     private func summaryRow(_ title: String, _ value: String) -> some View {

@@ -217,6 +217,12 @@ enum Recommend {
         var year: Int = 0
         /// 考生分数：专业级概率测算要用
         var score: Double = 0
+        /// 生成哪个批次的志愿表（BatchKind.rawValue）：各省批次志愿数上限不同，冲稳保配额按批次规则走
+        var batch: String = BatchKind.undergrad.rawValue
+        /// 该批次规则（志愿数上限、平行或顺序）；无规则数据的省为 nil，退回默认 42 个
+        var rule: BatchRuleDTO?
+
+        var batchKind: BatchKind { BatchKind(rawValue: batch) ?? .undergrad }
 
         static func from(_ p: StudentProfile) -> GenPrefs {
             GenPrefs(
@@ -315,8 +321,21 @@ enum Recommend {
         return hits.filter { seen.insert($0).inserted }
     }
 
-    /// 各策略下冲 / 稳 / 保的目标个数
+    /**
+     * 各策略下冲 / 稳 / 保的目标个数。
+     * 有批次规则时按该省的志愿数上限分配（辽宁本科批 112 个、新疆各批 18 个，差别很大），
+     * 顺序志愿（如四川本科提前批 A 段）第一志愿没录上会大幅掉档，不安排冲刺。
+     */
     static func planCounts(_ prefs: GenPrefs) -> (chong: Int, wen: Int, bao: Int) {
+        if let rule = prefs.rule {
+            var q = tierQuota(max: rule.max, strategy: prefs.strategy, sequential: rule.isSequential)
+            // 不服从调剂 → 退档就掉到下一批次：压缩冲刺、加厚保底
+            if !prefs.obeyAdjust {
+                let moved = min(q.reach, max(1, q.reach / 2))
+                q = (q.reach - moved, q.match, q.safe + moved)
+            }
+            return (chong: q.reach, wen: q.match, bao: q.safe)
+        }
         let base: (Int, Int, Int)
         switch prefs.strategy {
         case .aggressive: base = (18, 14, 10)
@@ -351,7 +370,7 @@ enum Recommend {
         }
         let blocked = candidates.count - pool.count
         if blocked > 0 {
-            res.warnings.append("按你的选考科目（\(prefs.subjects.joined(separator: "/"))）剔除了 \(blocked) 所已录专业均不符合选科要求的院校；未导入专业录取线的院校不参与该过滤。")
+            res.warnings.append("按你的选考科目（\(prefs.subjects.joined(separator: "/"))）剔除了 \(blocked) 所已录专业均不符合选科要求的院校；无内置专业录取线的院校不参与该过滤。")
         }
         // 有专业数据但符合选科的专业很少 → 提示专业选择面窄
         if !prefs.subjects.isEmpty, !majorsByUni.isEmpty {
@@ -483,11 +502,39 @@ enum Recommend {
         }
 
         res.items = ordered.map { tier, e in
-            VolunteerItem(uniName: e.rec.seed.name, tier: tier, prob: e.prob, note: reasonOf(e))
+            VolunteerItem(uniName: e.rec.seed.name, tier: tier, prob: e.prob, note: reasonOf(e), batch: prefs.batch)
         }
         res.chong = groups["冲"]!.count
         res.wen = groups["稳"]!.count
         res.bao = groups["保"]!.count
+
+        if let rule = prefs.rule {
+            let provBatches = DataStore.shared.batches(of: prefs.provId)
+            if rule.isSequential {
+                res.warnings.append(
+                    "「\(rule.name)」是\(rule.max <= 3 ? "顺序" : "梯度")志愿：\(rule.max <= 3 ? "只有 \(rule.max) 个志愿且第一志愿优先" : "第一志愿优先")，第一志愿必须放在把握最大的院校，不要冲。"
+                )
+            }
+            if !rule.verified {
+                res.warnings.append("「\(rule.name)」的志愿数上限按 \(rule.max) 个生成，该数字尚未与当年官方文件逐条核对，正式填报前请在省考试院公告确认。")
+            }
+            if rule.batchKind == .earlyUG, let groups = provBatches?.earlyGroups, !groups.isEmpty {
+                res.warnings.append("提前批各类别（\(groups.joined(separator: "、"))）只能选报其中一类，多数还要体检、政审或面试；提前批被录取后，本科批志愿自动作废。")
+            }
+            if !rule.allowAdjust && prefs.obeyAdjust {
+                res.warnings.append("\(rule.isGroupUnit ? "该批次" : "本省该批次")是「专业（类）+学校」模式，不存在专业调剂选项，每个志愿都必须填报能接受的专业。")
+            }
+            if let note = provBatches?.supplementNote, res.items.count >= rule.max {
+                res.warnings.append(note)
+            }
+            // 四川本科批 A/B 段、辽宁提前批 A/B 段这类：源数据里没把分段投档线分开，同归一个批次类型
+            let sameKind = (provBatches?.batches ?? []).filter { $0.batchKind == rule.batchKind }
+            if sameKind.count > 1 {
+                res.warnings.append(
+                    "投档线数据没有把 \(sameKind.map(\.name).joined(separator: "、")) 分开，这几个批次会用同一批院校线生成，志愿会重复；正式填报请按官方文件分别确认各段的招生计划。"
+                )
+            }
+        }
 
         if res.bao == 0 {
             res.warnings.append("没有找到稳妥的保底院校，建议下调目标层次或到「院校推荐」手动挑选。")

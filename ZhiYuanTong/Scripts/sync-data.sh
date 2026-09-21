@@ -10,6 +10,15 @@ cd "$ROOT"
 TMP=".export-data.tmp"
 trap 'rm -rf "$TMP"' EXIT
 
+# 同步数据管道产物：一分一段表 / 投档线 / 院校主数据随 App 打包（dist 不存在时沿用仓库内已有副本）
+DIST="data-pipeline/dist/app_import"
+OFFICIAL="ZhiYuanTong/ZhiYuanTong/Resources/Data/official"
+if [ -d "$DIST" ]; then
+  mkdir -p "$OFFICIAL"
+  cp "$DIST"/*.csv "$OFFICIAL"/
+  cp data-pipeline/dist/universities_full.csv "$OFFICIAL/universities.csv"
+fi
+
 # 用 esbuild 把 TS 脚本打包成 node 可直接执行的 ESM（本地装了就用本地的，否则临时拉取）
 if [ -x "node_modules/.bin/esbuild" ]; then
   ESBUILD="node_modules/.bin/esbuild"

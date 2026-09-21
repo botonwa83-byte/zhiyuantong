@@ -9,20 +9,67 @@
 > 改完数据执行 `bash ZhiYuanTong/Scripts/sync-data.sh`（或 `npm run data:ios`）重新生成 `ZhiYuanTong/ZhiYuanTong/Resources/Data/bundle.json`，再在 Xcode 里重新编译。
 > 根目录 `package.json` 只剩数据管道与数据导出脚本（依赖仅 `esbuild`），Web 依赖（`react`/`vite`/`@capacitor/*`）已随 `node_modules` 清理。
 
+## 〇、断点（2026-09-20 收工，下次开工直接看这一节）
+
+### 今天做完的：分批次志愿填报 · 三个阶段全部落地
+
+| 阶段 | 内容 | 关键文件 |
+| --- | --- | --- |
+| 一 | 批次打通：投档线带 `batch`，按批次取数 | `ZhiYuanTong/ZhiYuanTong/Dataset.swift`（`BatchKind` 6 类归一化）、`Engine.swift` |
+| 二 | 批次规则数据集：31 省志愿数/模式/志愿单位 | `ZhiYuanTong/Scripts/data/batches.ts` → `bundle.json.batchRules` → `Models.swift`（`BatchRuleDTO`）、`DataStore.batches(of:)`、`Dataset.swift`（`fillableBatches` / `tierQuota`） |
+| 三 | App 按批次生成志愿表 | `Models.swift`（`VolunteerItem.batch`）、`Dataset.swift`（`buildBatchAdmissionIndex`）、`Engine.buildRecords(batch:)`、`AppState.swift`（`currentBatch` / `availableBatches` / `evals(for:)` / `selectBatch`）、`Recommend.swift`（`GenPrefs.batch`+`rule`）、`GenWizardView.swift`（第 0 步选批次）、`MyListView.swift`（批次切换/规则卡/提前批类别卡/征集提醒卡） |
+
+设计细节与实测数据见 **`docs/BATCH_DESIGN.md` §六**。
+
+**当前状态**：Xcode Debug 编译通过。命令行实测四个场景均正常（河南物理 550 → 本科批 48 个 / 专科批 48 个；辽宁物理 480 → 本科批 112 个；四川物理 520 → 提前批 A 段 3 个顺序 + 本科批 A 段 20 / B 段 45；河南物理 350 本科线下 → 只剩专科批次）。
+
+### 明天第一件事（建议）：核对 28 个「未核对」批次的志愿数上限
+
+App 里这些批次标了 ⚠️「志愿数上限待核对」。**错的上限比没有更危险**，考生照着填会填不进去或浪费志愿位。
+
+- 优先级：河南、山东、河北、四川、广东、江苏（考生大省）→ 其余省份
+- 数据源：各省教育考试院当年的志愿设置公告（不是网上的二手汇总）
+- 改法：编辑 `ZhiYuanTong/Scripts/data/batches.ts` 对应批次的 `max`，确认后把 `verified` 改 `true` → `bash ZhiYuanTong/Scripts/sync-data.sh` → Xcode 重编译
+- 顺带核对的字段：`sequential`（顺序/梯度志愿）、`groupUnit`（院校专业组 vs 专业+学校）、`majorsPerVolunteer`、`allowAdjust`、`note`
+
+### 其余缺口（按优先级）
+
+1. **征集志愿（补录批）无数据** —— App 只有提醒卡，考生要自己盯省考试院公告
+2. **专项批（国家/高校/地方专项）没有资格字段** —— 现在按批次生成但不验证考生资格
+3. **四川本科批 A/B 段、辽宁提前批 A/B 段共用同一批投档线** —— 源数据没分段，两个批次生成结果重复（已在 App 内提示，根治要改 `Dataset.batchOf` 的归一化规则）
+4. **提前批的体检/政审/面试条件不在数据里** —— 只有类别不得兼报的提示
+5. 老缺口：院校 `city`/`kind` 缺失（城市筛选退化）、海南 900 分制批次线待核对、只有 2025 一年真实录取数据（2023/2024 补跑三年线差）、清华北大等部分顶尖院校在源数据里没有投档线
+
+### 续工常用命令
+
+```bash
+# 改完 batches.ts 或任何 data/*.ts 后重新生成 bundle.json
+bash ZhiYuanTong/Scripts/sync-data.sh
+
+# 编译验证
+cd ZhiYuanTong && xcodebuild -project ZhiYuanTong.xcodeproj -scheme ZhiYuanTong \
+  -sdk iphonesimulator -configuration Debug CODE_SIGNING_ALLOWED=NO build
+# 报 all-product-headers.yaml 写不了 → rm -rf ~/Library/Developer/Xcode/DerivedData/ZhiYuanTong-*
+
+# 算法冒烟（不依赖 Xcode）：先 cp Resources/Data/bundle.json /tmp/bundle.json，再 swiftc 编
+# Dataset.swift Models.swift RNG.swift DataStore.swift Engine.swift Employment.swift Recommend.swift + 临时 main.swift
+```
+
 ## 一、当前状态
 
 工作目录：`data-pipeline/`（虚拟环境 `.venv`，命令前缀 `cd data-pipeline && .venv/bin/python -m ...`）
 
 | 产物 / 模块 | 结果 |
 | --- | --- |
-| `staging/rank_table.csv` | 河南 2025，225 行（**仅物理类**） |
-| `staging/admission.csv` | 河南 2025，1687 行（含专业组/选科/位次） |
-| `staging/university_meta.csv` | 609 所院校（官方代码、所在地、公办/民办、985/211） |
-| `dist/universities_full.csv` | 608 所，App 可直接导入（`uni_code,name,prov,city,level,kind,nature`） |
-| `providers/prov_pdf.py` | **新增**：考试院一分一段 PDF 解析器（待真实 PDF 验证） |
-| `configs/provinces/*.toml` | **新增**：31 省配置骨架（对齐 App 省份清单） |
-| 校验 | 阻断 0 / 警告 1（历史类缺一分一段表）；位次口径已自动校正（原 512 条，见 §3.10） |
-| 单测 | **101 passed**（`python -m pytest tests -q`） |
+| `staging/rank_table.csv` | **2025 年 28 省，26195 行**（3+3 省份只有「综合」一轨，见 §3.11） |
+| `staging/admission.csv` | **2025 年 29 省，67189 行**（含专业组/选科/位次，位次已按一分一段重算） |
+| `staging/university_meta.csv` | **2700 所院校**（按规范名聚合，跨省招生代码不同，见 §3.11） |
+| `dist/app_import/` | **57 个文件**（28 份一分一段 + 29 份投档线），App 可直接导入 |
+| `dist/universities_full.csv` | 2700 所，App 可直接导入（`uni_code,name,prov,city,level,kind,nature`） |
+| `providers/prov_pdf.py` | **新增**：考试院一分一段 PDF 解析器（河南历史类 PDF 仍解析 0 行，待核对版式） |
+| `configs/provinces/*.toml` | 31 省配置（新疆/西藏改文理分科、海南满分 900、山西与河南专业线源停用） |
+| 校验 | **阻断 0 / 警告 6**（29 省全量统一校验一次） |
+| 单测 | **112 passed**（`python -m pytest tests -q`） |
 
 已实现模块：`config` `contract` `providers/{base,hf_csv,html_table,manual,xls,prov_pdf}` `parse` `normalize` `validate` `staging` `years` `derive` `build` `run`。
 
@@ -121,8 +168,45 @@
 - [x] App：`Dataset.swift` 新增 `interpolatedRank` / `reconcileAdmissionRanks` / `reconcileMajorRanks`，导入投档线/专业线时若位次与已导入的一分一段表偏差 > 40% 即按表重算；**先导入投档线、后导入一分一段表**的情况会在导入一分一段表时回溯重算
 - [x] 新增 `tests/test_reconcile_rank.py`（7 项），全量 `pytest` 101 通过
 
+### 3.11 31 省批量首跑（2026-09-20 完成，阻断 0 / 警告 6）
+
+跑法：`raw/` 备齐 64 份省级 CSV（本地副本，管道不自动下载）→ `python -m pipeline.run --all --year 2025` → `python -m pipeline.build --all`。
+
+覆盖情况（2025）：
+
+| 类别 | 省份 |
+| --- | --- |
+| 一分一段 + 投档线齐全 | 安徽 北京 重庆 福建 甘肃 广东 广西 贵州 海南 河北 黑龙江 河南 湖北 湖南 江苏 江西 吉林 辽宁 内蒙古 宁夏 陕西 山东 上海 四川 天津 新疆 云南 浙江（28 省） |
+| 只有投档线 | 西藏（一分一段源 missing） |
+| 无数据（源 404） | 青海 |
+| 已停用 | 山西（源数据科类缺失 + 分数是折算值）、河南专业线（源是反爬 HTML 页面） |
+
+本轮修掉的真 bug（按踩坑顺序）：
+
+1. **批跑只剩最后一省**：`write_table` 全量覆盖。新增 `_merge_existing()`：按 `prov_id + year` 替换本次省份的行；`university_meta` 没有省年份，改为按院校聚合。
+2. **院校名含截断 UTF-8 字节**：写出的 staging 行从 10 列变 19 列，下一轮回读直接 ParserError 崩掉。新增 `providers/base.clean_text()`（去 U+FFFD 与控制字符）+ `read_csv(encoding_errors="replace", on_bad_lines="warn")`。
+3. **山西科类缺失**：源里 `category` 全空，物理/历史两块数据拼在同一份 CSV（600 分同时出现累计 10452 与 1918 两条），且分数是折算值（442.152094087）。**已按省停用**——这种数据进 App 会让历史类考生拿到物理类位次，比没有数据更危险。
+4. **海南标准分**：满分 900，硬编码 750 会把全省判成超范围。配置新增 `max_score`（默认 750），validate 按省取上限。
+5. **新疆/西藏仍是文理分科**：数据集写「理科/文科」，`track_filter` 按「物理类/历史类」过滤会把行全滤掉（表现是「解析出 0 行」）。已改 filter。
+6. **脏行入库**：一分一段有 4 行只有分数没位次、投档线 167 行没有最低分。新增 `_drop_incomplete()` 按表的关键字段丢弃（`rank_table` 要 score+rank，`admission` 要 min_score）。
+7. **同一分数两份一分一段表**：去重时保留累计位次更大的那份（小表只覆盖一段批次，用它换算会系统性偏乐观）。
+8. **院校主数据膨胀到 23723 条**：同一所大学在各省招生代码不同（山东大学 44 个代码），按 `(uni_code, uni_name)` 去重无效。改为 `derive.aggregate_university_meta()` 按规范化名称聚合 → 2700 所。注意 **`uni_code` 是各省招生代码，不是教育部国标代码**，别当全局主键用。
+9. **合并键类型不一致**：内存里是 `pd.NA`（`<NA>`），落盘读回是 `NaN`（`nan`），还有 `1244` / `1244.0` 三种写法，`_key_text()` 统一归一化后才能去重。
+10. **导出没按省过滤**：全量 staging 下每省的 `{prov}_rank.csv` 都写成了全国全量。`_read_staging(kind, staging, prov_id)` 加省份过滤；重跑前先 `rm -rf dist/app_import`（某省缺表时旧文件不会被覆盖）。
+
+位次校正结果：**28 省全部命中**（不只是河南），median 比值 0.71–0.85 —— Gaokao-Compass 的 `min_rank` 整体口径有问题，各省约 3.7 万条已按一分一段表重算。江苏/天津/内蒙古另有少量 `dropped`（表中查不到对应分数，位置空）。
+
+- [ ] 待办（数据缺口）：`dist/universities_full.csv` 有 2700 所院校，但 **90 所缺属地、`city` 全空**（数据集 `school-admission` 只有 `school_province`，没有 city），App 的城市筛选对官方导入院校会失效 → 需另找院校城市来源（教育部院校名录 / 阳光高考人工导出），或继续走"名称匹配 + 空值降级"；**不要用院校名前缀猜省份**（"中国音乐学院"这类会猜错）
+- [ ] 待办：青海补源、西藏补一分一段、山西换源或人工拆科类、河南专业线按模板人工录入
+- [x] **分批次志愿填报 · 阶段一（批次打通）**：调查与设计见 `docs/BATCH_DESIGN.md`。投档线导出保留批次、聚合键含批次，App 侧 `BatchKind` 归一化与主批次院校线
+- [x] **分批次志愿填报 · 阶段二（批次规则数据集）**：`Scripts/data/batches.ts` 31 省规则（批次顺序 / 志愿数上限 5~112 / 平行或顺序 / 院校专业组或专业+学校 / 提前批类别 / 征集提示）→ `bundle.json.batchRules` → Swift `BatchRuleDTO`、`DataStore.batches(of:)`、`fillableBatches`、`tierQuota`
+- [x] **分批次志愿填报 · 阶段三（App 按批次生成志愿表）**：`VolunteerItem.batch` + `buildBatchAdmissionIndex`（只收录该批次有投档线的院校）+ 向导第 0 步选批次 + 志愿表批次切换/规则卡/提前批类别卡/征集提醒卡 + 冲稳保按批次上限分配（顺序志愿不冲）。实测河南 48、辽宁 112、四川 A/B 段分段生成均正常
+- [ ] 待办（分批次剩余缺口）：征集志愿（补录批）无数据、专项批资格字段、四川本科批 A/B 段与辽宁提前批 A/B 段共用投档线（志愿会重复，已提示）、**28 个批次的志愿数上限需逐条核对官方文件**（考生大省优先）、提前批体检政审条件
+- [ ] 待办：`prov_pdf` 用真实 PDF 验证（河南历史类 PDF 仍解析 0 行，多半是版式/表头不匹配）
+- [ ] 待办：2023 / 2024 年同样跑一遍（`--all --year 2023 --year 2024`），凑齐三年线差
+
 ### 4. 产物与打包（Task 8-10）
-- [ ] 多省批量：把 31 省骨架逐一跑通首年数据（当前只有河南 2025 全链路）
+- [x] 多省批量：31 省 2025 首跑完成（见 §3.11）
 - [ ] 产物分发方式：目前产物 CSV 需手工传进手机再在 App 里导入，后续可考虑打包成 `.zyt` 数据集文件或直接在 App 内置按省下载
 
 ## 四、已知坑（避免重复踩）
@@ -139,6 +223,12 @@
 - **聚合数据源的 min_rank 不可信（2026-09-20）**：Gaokao-Compass `school-admission` 的 `min_rank` 疑似「最高分位次」，河南 2025 全部系统性偏小（中位 0.677 倍）。管道 `reconcile_min_rank` 已自动按一分一段表重算/置空，App 导入时也会重算。**新增数据源时先跑一遍看 run_report 里的 `rank_reconcile`**，出现 `unreliable_sources` 就说明该源位次不能用。
 - **多省批量跑的告警计数**：`staging/` 是共享的，各省报告里若各自跑 `validate_staging` 会把同一批告警重复计 N 次；现已改成跑完全部省份统一校验一次，`run_report.json` 结构为 `{years, provinces[], blocking_issues, warning_issues, issues}`。
 - **App 院校属地 id**：`ZhiYuanTong/Scripts/data/universities.ts` 里 6 所陕西高校（西安交大、西工大、西北农林、西电、陕师大、西安理工）曾误写 `shanxi`（山西），已修正为 `shaanxi`。新增院校数据时注意 `shanxi`(山西) / `shaanxi`(陕西) 的拼写。
+- **多省批跑必须带省份过滤（2026-09-20）**：staging 是 31 省共享的，任何"写整表"（`write_table`）或"读整表"（`_read_staging`）的地方都要带 `prov_id`——写的时候用 `_merge_existing` 按 `prov_id+year` 替换，读的时候按 `prov_id` 过滤。否则会静默出错：只剩最后一省数据，或每省产物都写成全国全量（西藏 rank 导出 26195 行就是这么来的）。这是批跑最容易踩的一类 bug。
+- **源不可信就在配置里停用（2026-09-20）**：`[[sources]]` 加 `disabled = true` + `note`，跑批会标记 `disabled` 并跳过，比留着脏数据或删掉配置更可控。已停用：山西（科类缺失 + 分数是折算值）、河南专业线（源是反爬 HTML 页面）。
+- **人工副本可能是 HTML 反爬页**：`manual` provider 原先会把 HTML 当 CSV 解析出垃圾行（河南专业线解析出 9 行），现已加 HTML 头检测直接报错。同理 `hf_csv` 读回 staging 时带 `encoding_errors="replace"`，写入前走 `clean_text()` 去掉 U+FFFD 与控制字符——院校名里含截断 UTF-8 字节会让 CSV 列数错乱，下一轮回读直接 ParserError 崩掉。
+- **院校 `uni_code` 不是国标代码（2026-09-20）**：数据集里的是各省招生代码，同一所大学在不同省代码不同（山东大学 44 个代码），按 `(uni_code, uni_name)` 去重无效，院校主数据会膨胀到 23723 条。已改为按规范化名称聚合（`derive.aggregate_university_meta`）→ 2700 所。**别把 `uni_code` 当全局主键**。
+- **合并键类型不一致**：内存里是 `pd.NA`（`<NA>`），落盘读回是 `NaN`（`nan`），还有 `1244` / `1244.0` 三种写法，去重/合并前先用 `_key_text()` 归一化。
+- **海南满分 900（2026-09-20）**：不是所有省都 750。配置新增 `max_score`（默认 750），validate 按省取上限，否则海南全省被判"分数超范围"。
 
 ## 五、常用命令
 
@@ -147,13 +237,62 @@ cd data-pipeline
 .venv/bin/python -m pipeline.run --prov henan --year 2025            # 跑单省
 .venv/bin/python -m pipeline.run --all --year 2025 --list            # 导出下载清单（--prov 不再必填）
 .venv/bin/python -m pipeline.run --all --year 2025                   # 全量跑
-.venv/bin/python -m pipeline.build                                    # 院校库 + App 可导入 CSV（dist/app_import/）
+.venv/bin/python -m pipeline.run --all --year 2025                   # 全量跑：29 省，约 40s
+.venv/bin/python -m pipeline.build --all                              # 全部省份产物（dist/app_import/{prov}_{rank,admission}.csv）
+.venv/bin/python -m pipeline.build                                    # 院校库 + App 可导入 CSV（默认省份）
 .venv/bin/python -m pipeline.build --prov henan --only app-import     # 只导出一分一段/投档线/专业录取线
-.venv/bin/python -m pytest tests -q                                   # 单测（94 passed）
+.venv/bin/python -m pytest tests -q                                   # 单测（113 passed）
 cat staging/run_report.json                                           # 运行报告（含 missing/failed 来源）
+
+# 管道产物 -> App 内置数据（sync-data.sh 会自动拷贝 dist 到 App 资源）
+bash ZhiYuanTong/Scripts/sync-data.sh   # 生成 bundle.json（含院校库并入）+ 同步 official/*.csv
+
+cd ZhiYuanTong
+xcodebuild -project ZhiYuanTong.xcodeproj -scheme ZhiYuanTong -sdk iphonesimulator CODE_SIGNING_ALLOWED=NO build
 ```
 
+## 五·五、App 内置官方数据（2026-09-20）
+
+**定位：数据随 App 打包，按考生高考省份自动匹配；用户不上传数据、不校准分数线。**
+
+- 资源：`ZhiYuanTong/ZhiYuanTong/Resources/Data/official/{prov}_{rank,admission}.csv`（29 省，57 个文件，3.2 MB）+ `universities.csv`（管道院校主数据 2700 所）
+- 工程引用：`official` 目录在 pbxproj 里是 **folder reference**，新增省份拷贝文件即可，不用改工程
+- 装载：`OfficialData.swift` 按 `profile.provId` 读 CSV → 复用 `importRankCsv/importAdmissionCsv`（位次按一分一段表复核）→ 缓存；`AppState.recompute()` 每次自动装载
+- 数据集**不再存 UserDefaults**（旧存档在 init 里清掉）；「导入 / 管理官方数据」与「批次线校准」入口已删除，`DataImportView.swift` 已删除；老版本留下的 `linesOverride` 在「我的」页提供一次性清除入口
+- 年份：`HISTORY_YEARS = [2023, 2024, 2025]`、`CURRENT_YEAR = 2025`（内置录取数据就是 2025 年）。**Engine 规则：某校若有内置官方数据的年份，只用官方年份算 avgDiff/avgRank，模型推算值不参与平均**（否则 2023/2024 无数据时假值会稀释真实线）
+- 院校库：346 → 2703 所。新增院校的 `base` 由该校在已内置省份的投档线反推「分数 − 特殊类型线」的中位数；`city`/`kind`/`strengths` 数据集没有，留空；就业字段按办学层次取中位数（UI 标为模型估算）
+- 性能：投档线查找加了 `admissionIndex`（prov|track|year|院校名 → 记录），院校扩到 2700 所后不至于逐年逐校线性扫描
+
+待办 / 已知缺口：
+- [ ] 院校 `city` 全空、`kind` 为空 → ExploreView 按城市 / 院校类型筛选时只剩内置那 346 所，需另找院校城市来源（教育部院校名录）
+- [ ] 海南为 900 分制标准分，`provincesExtra.ts` 里仍是 750 制近似值（special 475），需按真实标准分核对；`universitiesFromOfficial.ts` 已跳过海南样本避免线差失真
+- [ ] 只有 2025 一年真实录取数据（2023 / 2024 待补），趋势曲线与「三年线差」仍是模型值 + 一年真值
+
 ## 六、本轮改动清单（便于 review）
+
+### 本轮（2026-09-20 · App 内置官方数据，去掉导入与校准）
+
+- 新增 `ZhiYuanTong/OfficialData.swift`：按考生省份自动装载内置 CSV（含缓存与覆盖统计）
+- `AppState.swift`：数据集不再持久化到 UserDefaults（旧存档清除）、`recompute()` 自动装载、删除 `importXxx / clearDataset / stats / hasOfficialData`，新增 `coverage`
+- `MeView.swift`：数据接入卡 → 数据覆盖卡；删除导入与批次线校准入口、`CalibrateSheet`
+- 删除 `DataImportView.swift`（pbxproj 同步清理）；`HomeView` / `UniDetailView` / `MyListView` / `Recommend` 的「导入」文案改为「内置」
+- `Engine.swift` + `Models.swift`：有内置官方数据的年份只用官方年份；`Province.linesUpTo` 支持批次线按最近年份回退；新增 `admissionIndex`
+- `Scripts/export-data.ts` + `Scripts/data/universitiesFromOfficial.ts`：管道院校主数据并入院校库（346 → 2703 所），base 由投档线反推
+- `Scripts/data/provinces.ts`：`HISTORY_YEARS` 改 `[2023, 2024, 2025]`；`sync-data.sh` 同步 dist 产物到 App 资源
+
+### 上一轮（2026-09-20 · 31 省批量首跑）
+
+- `pipeline/run.py`：新增 `_merge_existing()`（按 `prov_id+year` 替换，修"批跑只剩最后一省"）、`_drop_incomplete()`（脏行不入库）、`_key_text()`（`<NA>/nan/1244.0` 归一化）、同一分数多份一分一段表取累计更大者、来源 `disabled` 支持
+- `pipeline/derive.py`：新增 `aggregate_university_meta()`（按规范名聚合院校 → 2700 所，解决招生代码跨省不同导致的膨胀）、`merge_university_meta()` 改为按名合并
+- `pipeline/build.py`：`_read_staging` 增加省份过滤（修"每省产物写成全国全量"）；`build --all` 支持一次导出全部省份
+- `pipeline/providers/base.py`：`clean_text()` 去掉 U+FFFD 与控制字符（修 CSV 列数错乱导致下一轮回读 ParserError）
+- `pipeline/providers/hf_csv.py`：读取带 `encoding_errors="replace"` + `on_bad_lines="warn"`
+- `pipeline/providers/manual.py`：HTML 反爬页检测（不再把网页当 CSV 解析）
+- `pipeline/validate.py` + `pipeline/config.py`：新增 `max_score`（海南 900）
+- `configs/provinces/`：山西、河南专业线停用；新疆/西藏改文理分科（理科/文科）；海南 `max_score = 900`
+- 新增 `tests/test_batch_staging.py`（7 项）+ `tests/test_derive_university.py`；全量 **112 passed**
+
+### 上一轮
 
 - 新增 `pipeline/providers/prov_pdf.py` + `tests/test_prov_pdf.py`（12 个用例，含真实 PDF 端到端冒烟）
 - `pipeline/providers/base.py`：抽出 `MissingArchive` / `local_dataset_path` / `archive_dest`，`hf_csv` 与 `prov_pdf` 共用本地副本路径规则

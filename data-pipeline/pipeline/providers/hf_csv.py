@@ -24,7 +24,8 @@ def ensure_local(url: str, dest: Path) -> Path:
 
 
 def parse_hf_csv(path: Path, options: dict) -> tuple[list[dict], int]:
-    df = pd.read_csv(Path(path), dtype=str, encoding="utf-8-sig").dropna(how="all")
+    # encoding_errors=replace：数据集里有截断的 UTF-8 字节，严格解码会整份报废
+    df = pd.read_csv(Path(path), dtype=str, encoding="utf-8-sig", encoding_errors="replace").dropna(how="all")
     if df.empty:
         return [], 0
     headers = list(df.columns)

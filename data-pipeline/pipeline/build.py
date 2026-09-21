@@ -20,7 +20,7 @@ DIST_DIR = Path(__file__).resolve().parent.parent / "dist"
 
 # App 导入页模板表头（改这里前先同步 DataImportView 的 template 与 Dataset.swift 的 ColumnKey）
 RANK_COLUMNS = ["分数", "位次", "省份", "年份", "科类"]
-ADMISSION_COLUMNS = ["院校名称", "省份", "科类", "年份", "最低分", "最低位次", "招生计划"]
+ADMISSION_COLUMNS = ["院校名称", "省份", "科类", "年份", "批次", "最低分", "最低位次", "招生计划"]
 MAJOR_COLUMNS = ["院校名称", "专业名称", "科类", "年份", "最低分", "最低位次", "计划数", "选科要求"]
 
 # App 导入表头（与 UniversitySeed 对齐；缺失即空，由 App 端降级展示）
@@ -65,8 +65,8 @@ def build_universities(
             continue
         entry = merged.setdefault(name, {c: "" for c in OUTPUT_COLUMNS})
         # 官方数据只补空位，不覆盖 App 内置标注
-        entry["uni_code"] = entry["uni_code"] or str(row["uni_code"]).strip()
-        entry["prov"] = entry["prov"] or str(row["uni_prov"]).strip()
+        entry["uni_code"] = entry["uni_code"] or _clean_code(str(row["uni_code"]))
+        entry["prov"] = entry["prov"] or _province_label(str(row["uni_prov"]).strip())
         entry["level"] = entry["level"] or str(row["level"]).strip()
         entry["nature"] = entry["nature"] or str(row["nature"]).strip()
 
@@ -82,6 +82,25 @@ def build_universities(
                 row["name"] = name
             writer.writerow({c: row.get(c, "") for c in OUTPUT_COLUMNS})
     return out
+
+
+def _clean_code(value: str) -> str:
+    """CSV 往返会把整数代码写成 '1761.0'，导出前还原。"""
+    v = (value or "").strip()
+    if v.endswith(".0") and v[:-2].isdigit():
+        return v[:-2]
+    return v
+
+
+def _province_label(value: str) -> str:
+    """院校属地可能是 prov_id（heilongjiang）也可能是中文名，统一成中文名。"""
+    if not value:
+        return ""
+    try:
+        cfg = load_province_config(value)
+    except (FileNotFoundError, KeyError):
+        return value
+    return cfg.name
 
 
 def _province_name(prov_id: str) -> str:
@@ -129,15 +148,19 @@ def _write_csv(rows: list[dict], columns: list[str], path: Path) -> int:
     return len(rows)
 
 
-def _read_staging(kind: str, staging_dir: Path) -> pd.DataFrame:
+def _read_staging(kind: str, staging_dir: Path, prov_id: str = "") -> pd.DataFrame:
+    """读 staging 表；给 prov_id 时只留该省的行（全量批跑后 staging 是 29 省共享的）。"""
     path = staging_dir / f"{kind}.csv"
     if not path.exists():
         return pd.DataFrame()
-    return pd.read_csv(path, dtype=str, encoding="utf-8").fillna("")
+    df = pd.read_csv(path, dtype=str, encoding="utf-8").fillna("")
+    if prov_id and "prov_id" in df.columns:
+        df = df[df["prov_id"].astype(str).str.strip() == prov_id]
+    return df
 
 
 def build_rank_export(staging_dir: Path, dist_dir: Path, prov_id: str) -> Path | None:
-    df = _read_staging("rank_table", staging_dir)
+    df = _read_staging("rank_table", staging_dir, prov_id)
     if df.empty:
         return None
     name = _province_name(prov_id)
@@ -158,14 +181,20 @@ def build_rank_export(staging_dir: Path, dist_dir: Path, prov_id: str) -> Path |
 
 
 def build_admission_export(staging_dir: Path, dist_dir: Path, prov_id: str) -> Path | None:
-    """投档线按「省份+年份+科类+院校」聚合：多个专业组取最低的那条做院校线，计划数求和。"""
-    df = _read_staging("admission", staging_dir)
+    """投档线按「省份+年份+科类+批次+院校」聚合：批次必须留在分组键里，同一院校常同时出现在本科批与专科批，
+    跨批次取最低分会把专科线当院校线（如河北科技工程职业技术大学 本科批 500 / 专科批 392）。专业组内仍取最低分。"""
+    df = _read_staging("admission", staging_dir, prov_id)
     if df.empty:
         return None
     name = _province_name(prov_id)
     grouped: dict[tuple, dict] = {}
     for _, r in df.iterrows():
-        key = (str(r["year"]).strip(), str(r["track"]).strip(), str(r["uni_name"]).strip())
+        key = (
+            str(r["year"]).strip(),
+            str(r["track"]).strip(),
+            str(r.get("batch") or "").strip(),
+            str(r["uni_name"]).strip(),
+        )
         item = grouped.setdefault(key, {"score": None, "rank": None, "plan": 0.0})
         score = pd.to_numeric(r.get("min_score"), errors="coerce")
         if pd.notna(score) and (item["score"] is None or score < item["score"]):
@@ -181,11 +210,12 @@ def build_admission_export(staging_dir: Path, dist_dir: Path, prov_id: str) -> P
             "省份": name,
             "科类": _track_label(track, prov_id),
             "年份": _num(year),
+            "批次": batch,
             "最低分": _num(item["score"]),
             "最低位次": _num(item["rank"]) if item["rank"] else "",
             "招生计划": _num(item["plan"]) if item["plan"] else "",
         }
-        for (year, track, uni), item in grouped.items()
+        for (year, track, batch, uni), item in grouped.items()
     ]
     rows.sort(key=lambda x: (x["年份"], x["科类"], -(float(x["最低分"] or 0))))
     out = dist_dir / "app_import" / f"{prov_id}_admission.csv"
@@ -194,7 +224,7 @@ def build_admission_export(staging_dir: Path, dist_dir: Path, prov_id: str) -> P
 
 
 def build_major_export(staging_dir: Path, dist_dir: Path, prov_id: str) -> Path | None:
-    df = _read_staging("major_admission", staging_dir)
+    df = _read_staging("major_admission", staging_dir, prov_id)
     if df.empty:
         return None
     name = _province_name(prov_id)
@@ -229,6 +259,20 @@ def build_app_imports(staging_dir: Path = STAGING_DIR, dist_dir: Path = DIST_DIR
     return out
 
 
+def all_prov_ids(staging_dir: Path) -> list[str]:
+    """staging 里出现过的所有省份，用于一次导出全部省份的产物。"""
+    seen: list[str] = []
+    for kind in ("admission", "rank_table", "major_admission", "university_meta"):
+        df = _read_staging(kind, staging_dir)
+        if df.empty or "prov_id" not in df.columns:
+            continue
+        for value in df["prov_id"].tolist():
+            prov = str(value).strip()
+            if prov and prov not in seen:
+                seen.append(prov)
+    return sorted(seen)
+
+
 def _guess_prov_id(staging_dir: Path) -> str:
     """从 staging 表里的 prov_id 反推省份，用于默认文件名。"""
     for kind in ("rank_table", "admission", "major_admission", "university_meta"):
@@ -251,6 +295,7 @@ def main() -> None:
     parser.add_argument("--builtin", default="", help="App 内置院校 CSV（name,prov,city,level,kind,nature,uni_code）")
     parser.add_argument("--prov", default="", help="省份 id（henan）；省略则按 staging 里的 prov_id 推断")
     parser.add_argument("--only", choices=["universities", "app-import"], default="", help="只生成某一类产物")
+    parser.add_argument("--all", action="store_true", help="导出 staging 里全部省份的导入 CSV")
     args = parser.parse_args()
 
     staging = Path(args.staging)
@@ -262,9 +307,11 @@ def main() -> None:
         print(f"已生成 {out}（{rows} 所院校）")
 
     if args.only != "universities":
-        for path in build_app_imports(staging, dist, args.prov):
-            rows = sum(1 for _ in path.open(encoding="utf-8")) - 1
-            print(f"已生成 {path}（{rows} 行）")
+        provs = all_prov_ids(staging) if args.all else [args.prov]
+        for prov in provs:
+            for path in build_app_imports(staging, dist, prov):
+                rows = sum(1 for _ in path.open(encoding="utf-8")) - 1
+                print(f"已生成 {path}（{rows} 行）")
 
 
 if __name__ == "__main__":

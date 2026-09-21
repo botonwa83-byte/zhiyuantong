@@ -9,13 +9,14 @@ from pathlib import Path
 import pandas as pd
 
 from pipeline.config import SourceSpec, list_provinces, load_province_config
-from pipeline.derive import derive_university_rows, reconcile_min_rank
+from pipeline.contract import TABLES
+from pipeline.derive import aggregate_university_meta, derive_university_rows, reconcile_min_rank
 from pipeline.fetch import archive_path, resolve_url
 from pipeline.normalize import normalize_rows
 from pipeline.parse import parse_source
 from pipeline.providers.base import MissingArchive, archive_dest
 from pipeline.providers.hf_csv import ensure_local
-from pipeline.staging import write_table
+from pipeline.staging import table_path, write_table
 from pipeline.validate import validate_staging
 from pipeline.years import resolve_years
 
@@ -32,6 +33,92 @@ def _fetch(spec: SourceSpec, year: int, prov_id: str, force: bool) -> Path:
     from pipeline.fetch import fetch_source
 
     return fetch_source(spec, year, prov_id, force)
+
+
+# 关键字段缺失的行没有下游价值（一分一段没有分数、投档线没有最低分），落库前丢掉
+REQUIRED_VALUES: dict[str, tuple[str, ...]] = {
+    "rank_table": ("score", "rank"),
+    "admission": ("min_score",),
+    "major_admission": ("min_score", "major_name"),
+    "batch_lines": ("special", "undergrad"),
+}
+
+
+def _drop_incomplete(df: pd.DataFrame, kind: str) -> tuple[pd.DataFrame, int]:
+    """丢掉关键字段为空的行，返回 (清洗后的表, 丢弃行数)。"""
+    cols = [c for c in REQUIRED_VALUES.get(kind, ()) if c in df.columns]
+    if df.empty or not cols:
+        return df, 0
+    mask = df[cols[0]].notna() & (df[cols[0]].astype(str).str.strip() != "")
+    for col in cols[1:]:
+        mask &= df[col].notna() & (df[col].astype(str).str.strip() != "")
+    dropped = int((~mask).sum())
+    return (df[mask].reset_index(drop=True) if dropped else df), dropped
+
+
+def _dedupe(df: pd.DataFrame, kind: str) -> tuple[pd.DataFrame, int]:
+    """按契约唯一键去重。
+
+    一分一段偶见同一分数两份（如不同批次各一张表），这时保留累计位次更大的那份——
+    它统计的是更完整的考生集合，小表只覆盖一段批次，用它做位次换算会系统性偏乐观。
+    """
+    keys = [c for c in TABLES[kind].unique_key if c in df.columns] if kind in TABLES else []
+    if df.empty or not keys:
+        return df, 0
+    if "rank" in df.columns:
+        work = df.assign(_rk=pd.to_numeric(df["rank"], errors="coerce").fillna(-1))
+        out = work.sort_values("_rk", ascending=False).drop_duplicates(subset=keys, keep="first")
+        out = out.drop(columns=["_rk"])
+    elif kind == "university_meta":
+        # 同一所院校可能只有部分省份填了城市/层次，保留信息更完整的那条
+        work = df.assign(_full=df.notna().sum(axis=1))
+        out = work.sort_values("_full", ascending=False).drop_duplicates(subset=keys, keep="first")
+        out = out.drop(columns=["_full"])
+    else:
+        out = df.drop_duplicates(subset=keys, keep="first")
+    dropped = len(df) - len(out)
+    return (out.sort_index().reset_index(drop=True) if dropped else df), dropped
+
+
+def _key_text(value) -> str:
+    """合并键归一化：CSV 往返后 1244 / 1244.0 / "1244" 要能判为同一所院校。
+
+    缺失值尤其要统一：内存里是 pd.NA（str 得 "<NA>"），落盘读回变成 NaN（"nan"），
+    不归一化的话「院校代码缺失」的两条重复行会一直去不掉。
+    """
+    if value is None or (isinstance(value, float) and value != value):
+        return ""
+    text = str(value).strip()
+    if text.lower() in ("", "nan", "<na>", "none", "nat"):
+        return ""
+    return text[:-2] if text.endswith(".0") else text
+
+
+def _merge_existing(
+    merged: pd.DataFrame, kind: str, staging_dir: Path, prov_id: str, years: list[int]
+) -> pd.DataFrame:
+    """多省批跑时 staging 是共享的：只替换本次省份+年份的行，别把其他省的数据冲掉。
+
+    university_meta 没有 prov_id（是院校主数据，一行一校），改为按院校代码合并去重。
+    """
+    path = table_path(kind, staging_dir)
+    if not path.exists():
+        return merged
+    # 历史 staging 可能含坏字节，容错读：坏字符替换 + 跳过坏行，别让批跑到一半崩掉
+    old = pd.read_csv(path, encoding="utf-8", encoding_errors="replace", on_bad_lines="warn")
+    if old.empty:
+        return merged
+    if kind == "university_meta":
+        # 同一所大学各省招生代码不同，只能按规范名聚合；否则跨省累积出上万条重复院校
+        both = pd.concat([old, merged], ignore_index=True)
+        return aggregate_university_meta(both)
+    if "prov_id" not in old.columns or "year" not in old.columns:
+        return merged
+    touched = {str(y) for y in years}
+    keep = old[~((old["prov_id"].astype(str) == prov_id) & (old["year"].astype(str).isin(touched)))]
+    if merged is None or merged.empty:
+        return keep
+    return pd.concat([keep, merged], ignore_index=True)
 
 
 def run_province(
@@ -57,6 +144,10 @@ def run_province(
     for year in years:
         for spec in cfg.sources:
             entry = {"kind": spec.kind, "year": year, "parser": spec.parser}
+            if spec.disabled:
+                entry.update({"status": "disabled", "note": spec.note})
+                report["sources"].append(entry)
+                continue
             try:
                 raw = _fetch(spec, year, prov_id, force)
                 rows = parse_source(spec, raw)
@@ -98,6 +189,15 @@ def run_province(
             merged, stats = reconcile_min_rank(merged, rank_df)
             if stats:
                 report.setdefault("rank_reconcile", {})[kind] = stats
+        merged, invalid = _drop_incomplete(merged, kind)
+        if kind == "university_meta":
+            merged = aggregate_university_meta(merged)
+        merged, dupes = _dedupe(merged, kind)
+        if dupes:
+            report["dropped_duplicate_rows"] = report.get("dropped_duplicate_rows", 0) + dupes
+        if invalid:
+            report["dropped_invalid_rows"] = report.get("dropped_invalid_rows", 0) + invalid
+        merged = _merge_existing(merged, kind, staging_dir, prov_id, years)
         write_table(merged, kind, staging_dir)
         report[f"{kind}_rows"] = len(merged)
 

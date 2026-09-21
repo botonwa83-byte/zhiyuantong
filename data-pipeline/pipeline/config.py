@@ -17,6 +17,9 @@ class SourceSpec:
     options: dict = field(default_factory=dict)
     # 考试院 PDF / 动态页链接含随机 hash，无法用 {year} 模板推导，按年份逐个登记
     url_overrides: dict = field(default_factory=dict)
+    # 源数据不可信时停用（保留配置与说明，跑批时跳过）
+    disabled: bool = False
+    note: str = ""
 
 
 @dataclass(frozen=True)
@@ -25,6 +28,8 @@ class ProvinceConfig:
     name: str
     mode: str  # 3+1+2 | 3+3
     sources: list[SourceSpec]
+    # 高考满分：海南标准分 900，其余省份默认 750
+    max_score: int = 750
 
 
 def load_province_config(prov_id: str) -> ProvinceConfig:
@@ -35,6 +40,7 @@ def load_province_config(prov_id: str) -> ProvinceConfig:
         name=raw["name"],
         mode=raw["mode"],
         sources=[SourceSpec(**s) for s in raw.get("sources", [])],
+        max_score=int(raw.get("max_score", 750)),
     )
 
 

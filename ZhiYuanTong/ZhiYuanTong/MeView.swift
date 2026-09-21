@@ -4,8 +4,6 @@ struct MeView: View {
     @EnvironmentObject var state: AppState
 
     @State private var editing = false
-    @State private var calibrate = false
-    @State private var showImport = false
     @State private var bioOn = LocalStore.shared.isBioLockEnabled
     @State private var bioErr = ""
     @State private var showDelete = false
@@ -29,8 +27,6 @@ struct MeView: View {
             .background(Color.ink50.opacity(0.6))
             .navigationTitle("我的")
             .sheet(isPresented: $editing) { EditProfileSheet().environmentObject(state) }
-            .sheet(isPresented: $calibrate) { CalibrateSheet().environmentObject(state) }
-            .sheet(isPresented: $showImport) { DataImportView().environmentObject(state) }
             .alert("删除本机账号数据？", isPresented: $showDelete) {
                 Button("删除", role: .destructive) { state.deleteAccount() }
                 Button("取消", role: .cancel) {}
@@ -52,7 +48,7 @@ struct MeView: View {
             }
             HStack(spacing: 8) {
                 MiniStat(label: "省份 / 科类", value: "\(state.prov.name) \(trackLabel(profile.track, state.prov.mode))")
-                MiniStat(label: "分数", value: "\(Int(profile.score))", sub: profile.rank.map { "位次 \(Int($0))" } ?? "位次估算")
+                MiniStat(label: "分数", value: "\(Int(profile.score))", sub: profile.rank.map { "位次 \(Int($0))" } ?? "位次按一分一段换算")
             }
             HStack(spacing: 8) {
                 MiniStat(label: "意向城市", value: profile.cities.isEmpty ? "未设置" : profile.cities.joined(separator: "、"))
@@ -62,7 +58,7 @@ struct MeView: View {
                 MiniStat(
                     label: "选考科目",
                     value: profile.subjects.isEmpty ? "未设置（不按选科过滤）" : profile.subjects.joined(separator: "/"),
-                    sub: profile.subjects.isEmpty ? "设置后可按专业选科要求过滤" : "导入专业录取线后生效"
+                    sub: profile.subjects.isEmpty ? "设置后可按专业选科要求过滤" : "内置专业录取线的省份生效"
                 )
             }
             MiniStat(label: "服从专业调剂", value: profile.obeyAdjust ? "已勾选" : "未勾选", sub: profile.obeyAdjust ? "退档风险低" : "建议勾选以降低退档风险")
@@ -70,33 +66,34 @@ struct MeView: View {
         .card()
     }
 
+    /// 数据覆盖：内置的一分一段表 / 投档线按考生高考省份自动匹配，无需导入或校准
     private var dataCard: some View {
         VStack(alignment: .leading, spacing: 10) {
-            SectionTitle(title: "官方数据接入", sub: "导入一分一段表 / 投档线 / 专业录取线 / 就业质量报告后，测算改用真实数据")
-            let s = state.stats
-            Text(state.hasOfficialData
-                 ? "已导入：\(s.tables) 张一分一段表（\(s.points) 个分数点）· \(s.admissions) 条投档线 · \(s.majors) 条专业录取线 · \(s.employments) 份就业报告"
-                 : "当前使用内置示例模型")
-                .font(.caption).foregroundStyle(Color.ink500)
-            Button {
-                showImport = true
-            } label: {
-                Text("导入 / 管理官方数据")
-                    .font(.subheadline.weight(.semibold))
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 11)
-                    .background(RoundedRectangle(cornerRadius: 12).fill(Color.brand))
-                    .foregroundStyle(Color.white)
+            SectionTitle(title: "数据覆盖", sub: "随 App 内置 · 按高考省份自动匹配")
+            let c = state.coverage
+            if c.isEmpty {
+                Text("\(state.prov.name) 的录取数据尚未内置，测算暂用内置推算模型；该省数据会在后续版本补齐。")
+                    .font(.caption).foregroundStyle(Color.ink500)
+            } else {
+                let years = c.years.map(String.init).joined(separator: " / ")
+                Text("\(state.prov.name) · \(years) 年：一分一段 \(c.points) 个分数点 · 投档线 \(c.admissions) 条"
+                     + (c.majors > 0 ? " · 专业录取线 \(c.majors) 条" : ""))
+                    .font(.caption).foregroundStyle(Color.ink500)
+                Text("数据来自各省教育考试院公开信息，随 App 版本更新；不需要手动导入，也不需要校准批次线。")
+                    .font(.caption2).foregroundStyle(Color.ink400)
             }
-            Button {
-                calibrate = true
-            } label: {
-                Text("批次线校准（填入今年官方批次线）")
-                    .font(.subheadline.weight(.semibold))
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 11)
-                    .background(RoundedRectangle(cornerRadius: 12).fill(Color.brandSoft))
-                    .foregroundStyle(Color.brand)
+            // 老版本留下的手动校准值：清掉，回到官方数据
+            if state.profile?.linesOverride != nil {
+                Button {
+                    state.update { $0.linesOverride = nil }
+                } label: {
+                    Text("清除旧版手填批次线，改用官方数据")
+                        .font(.subheadline.weight(.semibold))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 11)
+                        .background(RoundedRectangle(cornerRadius: 12).fill(Color.brandSoft))
+                        .foregroundStyle(Color.brand)
+                }
             }
         }
         .card()
@@ -156,7 +153,7 @@ struct MeView: View {
     private var sourceCard: some View {
         VStack(alignment: .leading, spacing: 6) {
             SectionTitle(title: "数据来源说明", sub: "请以省考试院公布数据为准")
-            Text("省份批次线与院校录取数据为公开信息整理后的模型化示例；正式填报请以各省教育考试院公布的《一分一段表》《招生计划》与院校招生章程为准。就业数据为按学科门类与城市景气度构建的中位数模型，导入高校官方就业质量报告后自动替换为真实值。")
+            Text("省份批次线、一分一段表与院校投档线为各省教育考试院公开信息整理所得，随 App 版本更新；正式填报请以省考试院公布的《一分一段表》《招生计划》与院校招生章程为准。就业数据为按学科门类与城市景气度构建的中位数模型，用于横向比较，不代表任何院校的官方就业质量报告。")
                 .font(.caption).foregroundStyle(Color.ink700)
         }
         .card()
@@ -222,10 +219,10 @@ private struct EditProfileSheet: View {
 
     private var footerText: String {
         switch currentMode {
-        case .t33: return "3+3：勾选你选考的三门；导入「专业录取线」后按选科要求过滤专业"
+        case .t33: return "3+3：勾选你选考的三门；有内置专业录取线时按选科要求过滤专业"
         case .old: return ""
         case .t312:
-            return "3+1+2：首选科目「\(trackSubject ?? "")」由科类决定，这里勾选两门再选科目；导入「专业录取线」后按选科要求过滤专业"
+            return "3+1+2：首选科目「\(trackSubject ?? "")」由科类决定，这里勾选两门再选科目；有内置专业录取线时按选科要求过滤专业"
         }
     }
 
@@ -327,61 +324,6 @@ private struct EditProfileSheet: View {
             // 首选科目由科类决定，补全进去，专业选科校验才完整
             p.subjects = Array(Set(subjects + [trackSubject].compactMap { $0 })).sorted { (GAOKAO_SUBJECTS.firstIndex(of: $0) ?? 9) < (GAOKAO_SUBJECTS.firstIndex(of: $1) ?? 9) }
             p.obeyAdjust = obey
-        }
-    }
-}
-
-// MARK: - 批次线校准
-
-private struct CalibrateSheet: View {
-    @EnvironmentObject var state: AppState
-    @Environment(\.dismiss) private var dismiss
-
-    @State private var special = ""
-    @State private var undergrad = ""
-    @State private var college = ""
-
-    var body: some View {
-        NavigationStack {
-            Form {
-                Section("今年官方批次线（留空则用内置值）") {
-                    TextField("特殊类型线", text: $special).numKeyboard(.decimal)
-                    TextField("本科线", text: $undergrad).numKeyboard(.decimal)
-                    TextField("专科线", text: $college).numKeyboard(.decimal)
-                }
-                Section {
-                    Text("填入后，等效分换算与冲稳保分层都以官方线为锚点。")
-                        .font(.caption).foregroundStyle(Color.ink500)
-                }
-            }
-            .navigationTitle("批次线校准")
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("保存") {
-                        state.update { p in
-                            p.linesOverride = .init(
-                                special: Double(special),
-                                undergrad: Double(undergrad),
-                                college: Double(college)
-                            )
-                        }
-                        dismiss()
-                    }
-                }
-                ToolbarItem(placement: .destructiveAction) {
-                    Button("清除校准") {
-                        state.update { $0.linesOverride = nil }
-                        dismiss()
-                    }
-                }
-            }
-            .onAppear {
-                let o = state.profile?.linesOverride
-                special = o?.special.map { String(format: "%.0f", $0) } ?? ""
-                undergrad = o?.undergrad.map { String(format: "%.0f", $0) } ?? ""
-                college = o?.college.map { String(format: "%.0f", $0) } ?? ""
-            }
         }
     }
 }
