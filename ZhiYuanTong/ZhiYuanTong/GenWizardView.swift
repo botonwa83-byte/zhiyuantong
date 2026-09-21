@@ -409,7 +409,8 @@ struct GenWizardView: View {
                     .background(RoundedRectangle(cornerRadius: 12).fill(Color.brand))
                     .foregroundStyle(Color.white)
             }
-            .disabled(step == 3 && result.items.isEmpty)
+            // 内置数据还在后台装载时 evals 为空，此时生成只会得到空表
+            .disabled(step == 3 && (result.items.isEmpty || state.isLoading))
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)

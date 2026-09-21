@@ -513,7 +513,9 @@
 				ONLY_ACTIVE_ARCH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
-				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				// Debug 也开 -O：真机调试时 -Onone 下解码 bundle.json / 解析 CSV / 全量匹配极慢，
+				// 观感像「加载很多库很卡」。断点与 #if DEBUG 不受影响，仅部分变量无法在控制台 po。
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
 				SWIFT_VERSION = 5.0;
 			};
 			name = Debug;

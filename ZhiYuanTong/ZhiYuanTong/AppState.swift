@@ -85,6 +85,12 @@ final class AppState: ObservableObject {
     /// 就业预测首次计算较慢，装载完内置数据后预热一次
     private var warmed = false
 
+    // MARK: - 异步重算
+
+    private var recomputeTask: Task<Void, Never>?
+    /// 重算代号：只有最后一次任务的结果允许写回，避免快速改分数时旧结果覆盖新结果
+    private var recomputeGen = 0
+
     private func warmEmployment() {
         guard !warmed else { return }
         warmed = true
@@ -94,24 +100,46 @@ final class AppState: ObservableObject {
 
     // MARK: - 计算
 
+    /**
+     * 异步重算：装载省内置数据 + 构建索引 + 全量院校匹配都在后台线程跑，
+     * 首屏先渲染，算完再刷新（`isLoading` 期间各页显示装载提示）。
+     * 之前这些全在 @MainActor 同步执行，Debug 下会卡住启动好几秒。
+     */
     func recompute() {
+        recomputeTask?.cancel()
         guard let p = profile else { return }
-        let prov = store.province(p.provId)
-        engine.dataset = OfficialData.shared.dataset(provId: p.provId, year: store.currentYear, track: p.track)
-        engine.admissionIndex = buildAdmissionIndex(engine.dataset)
-        engine.batchIndex = buildBatchAdmissionIndex(engine.dataset)
-        let override = Recommend.override(of: p)
-        cur = engine.currentLines(prov, p.track, override: override)
-        rank = p.rank ?? engine.rankOfScore(prov, store.currentYear, p.track, p.score)
-        let records = engine.buildRecords(provId: p.provId, track: p.track)
-        evals = records.map { engine.evaluateUni($0, studentScore: p.score, studentRank: rank, curSpecial: cur.special) }
-        trend = engine.provinceTrend(prov, p.track, override: override)
+        isLoading = true
+        recomputeGen += 1
+        let gen = recomputeGen
+        let input = RecomputeInput(
+            provId: p.provId, track: p.track, score: p.score, rank: p.rank,
+            override: Recommend.override(of: p), year: store.currentYear
+        )
+        recomputeTask = Task.detached(priority: .userInitiated) { [self] in
+            let result = computeRecompute(input)
+            await MainActor.run {
+                guard gen == recomputeGen else { return }
+                apply(result)
+            }
+        }
+    }
+
+    private func apply(_ r: RecomputeResult) {
+        engine.dataset = r.dataset
+        engine.admissionIndex = r.admissionIndex
+        engine.batchIndex = r.batchIndex
+        cur = r.cur
+        rank = r.rank
+        evals = r.evals
+        trend = r.trend
         // 换省或改分数后，原来选的批次可能已经不可填（如本科线下选了本科批）→ 回退到默认批次
         if !availableBatches.contains(where: { $0.batchKind.rawValue == currentBatch }) {
             currentBatch = defaultBatch.rawValue
         }
         reloadBatchEvals()
         warmEmployment()
+        isLoading = false
+        recomputeTask = nil
     }
 
     // MARK: - 档案
@@ -274,6 +302,50 @@ final class AppState: ObservableObject {
         )
     }
 
+}
+
+// MARK: - 后台重算（放在顶层：detached 任务里不能引用主线程隔离类型的 self）
+
+/// 跨线程只传值：不含 AppState / AdmissionEngine
+struct RecomputeInput: @unchecked Sendable {
+    var provId: String
+    var track: Track
+    var score: Double
+    var rank: Double?
+    var override: CurrentLines?
+    var year: Int
+}
+
+struct RecomputeResult: @unchecked Sendable {
+    var dataset: OfficialDataset
+    var admissionIndex: [String: OfficialAdmission]
+    var batchIndex: [String: OfficialAdmission]
+    var cur: CurrentLines
+    var rank: Double
+    var evals: [Evaluated]
+    var trend: [ProvinceTrendPoint]
+}
+
+/// 后台纯计算：自建 engine 实例，不碰主线程状态
+private func computeRecompute(_ input: RecomputeInput) -> RecomputeResult {
+    let store = DataStore.shared
+    let prov = store.province(input.provId)
+    let ds = OfficialData.shared.dataset(provId: input.provId, year: input.year, track: input.track)
+    let engine = AdmissionEngine(store: store, dataset: ds)
+    let cur = engine.currentLines(prov, input.track, override: input.override)
+    let rank = input.rank ?? engine.rankOfScore(prov, input.year, input.track, input.score)
+    let records = engine.buildRecords(provId: input.provId, track: input.track)
+    let evals = records.map { engine.evaluateUni($0, studentScore: input.score, studentRank: rank, curSpecial: cur.special) }
+    let trend = engine.provinceTrend(prov, input.track, override: input.override)
+    return RecomputeResult(
+        dataset: ds,
+        admissionIndex: engine.admissionIndex,
+        batchIndex: engine.batchIndex,
+        cur: cur,
+        rank: rank,
+        evals: evals,
+        trend: trend
+    )
 }
 
 extension StudentProfile {

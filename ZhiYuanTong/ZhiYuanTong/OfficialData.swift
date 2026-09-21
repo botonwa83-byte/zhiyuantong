@@ -24,6 +24,7 @@ final class OfficialData {
 
     private static let dir = "official"
 
+    private let lock = NSLock()
     private var cache: [String: OfficialDataset] = [:]
 
     /// 已内置数据的省份（provId 集合），从包内目录枚举，新增省份无需改代码
@@ -39,14 +40,19 @@ final class OfficialData {
 
     /// 装载某省内建数据：先导入一分一段表，再导入投档线（投档线位次会按一分一段表复核）
     func dataset(provId: String, year: Int, track: Track) -> OfficialDataset {
-        if let hit = cache[provId] { return hit }
+        lock.lock()
+        let hit = cache[provId]
+        lock.unlock()
+        if let hit { return hit }
         var ds = OfficialDataset.empty
         // CSV 自带省份 / 年份 / 科类列，ctx 仅作缺列时的兜底
         let ctx = ImportContext(provId: provId, year: year, track: track)
         if let t = text("\(provId)_rank.csv") { _ = importRankCsv(t, ctx: ctx, into: &ds) }
         if let t = text("\(provId)_admission.csv") { _ = importAdmissionCsv(t, ctx: ctx, into: &ds) }
         if let t = text("\(provId)_major.csv") { _ = importMajorAdmissionCsv(t, ctx: ctx, into: &ds) }
+        lock.lock()
         cache[provId] = ds
+        lock.unlock()
         return ds
     }
 
@@ -70,3 +76,6 @@ final class OfficialData {
         return s
     }
 }
+
+extension OfficialData: @unchecked Sendable {}
+extension DataStore: @unchecked Sendable {}

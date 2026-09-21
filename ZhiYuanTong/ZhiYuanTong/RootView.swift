@@ -30,6 +30,21 @@ struct RootView: View {
         .overlay {
             if state.locked { LockView() }
         }
+        .overlay(alignment: .top) {
+            // 内置数据装载与全量匹配在后台线程跑，这里给个提示，避免首屏看起来像卡住
+            if state.isLoading {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("正在装载\(state.prov.name)官方数据…")
+                        .font(.caption)
+                        .foregroundStyle(Color.ink500)
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 9)
+                .background(Capsule().fill(Color.surface))
+                .padding(.top, 6)
+            }
+        }
     }
 }
 
